@@ -883,6 +883,7 @@ document.addEventListener('click', e => {
     case 'goTab': nav.tab = actEl.dataset.tab2; nav.sub = null; render(); window.scrollTo(0, 0); break;
     case 'closeSheet': closeSheet(); break;
     case 'quickAdd': openTxSheet(null, 'expense'); break;
+    case 'quickAddIncome': openTxSheet(null, 'income'); break;
     case 'editTx': openTxSheet(actEl.dataset.id); break;
     case 'transfer': openTxSheet(null, 'transfer'); break;
     case 'dismissStart': S.settings.startDismissed = true; save(); render(); break;
@@ -1020,12 +1021,17 @@ $('#importFile').addEventListener('change', e => {
 });
 
 /* ---------- Инициализация и автообновление PWA ---------- */
+// Запрет случайного пинч-зума и зума двойным тапом на iOS Safari
+document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
+
 render();
 showLockScreen();
 checkOnboarding();
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').then(reg => {
+  navigator.serviceWorker.register('sw.js?v=3').then(reg => {
     reg.update().catch(() => {});
   }).catch(() => {});
 }

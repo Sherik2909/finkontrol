@@ -1,6 +1,6 @@
 'use strict';
 /* =========================================================
-   ФинКонтроль — экраны (views) и рендер (v1.2 Pro)
+   ФинКонтроль — чистый и понятный интерфейс (v2.0 iOS Native)
    ========================================================= */
 
 const nav = {
@@ -14,21 +14,27 @@ const emptyBox = (e, text) => `<div class="empty"><span class="e">${e}</span>${t
 function progressBar(pct, color) { return `<div class="progress"><i style="width:${clamp(pct, 0, 100)}%;background:${color || 'var(--accent)'}"></i></div>`; }
 const pctColor = p => p >= 100 ? 'var(--neg)' : p >= 80 ? 'var(--warn)' : 'var(--pos)';
 
+/** Строка платежа / дохода — кнопки вынесены аккуратно, ничего не обрезается */
 function planRow(i) {
   const today = todayStr();
   const over = !i.done && i.date < today;
   const isInc = i.kind === 'income';
   const kindN = isInc ? 'доход' : i.kind === 'debt' ? 'кредит / долг' : 'обязательный платёж';
-  return `<div class="row ${i.done ? 'done' : ''} ${over ? 'overdue' : ''}">
-    <div class="ico">${i.icon}</div>
-    <div class="grow"><div class="t">${esc(i.name)}</div><div class="s">${fmtDate(i.date)} · ${kindN}${over ? ' · просрочено!' : ''}</div></div>
-    <div class="amt ${isInc ? 'pos' : ''}">${isInc ? '+' : '−'}${money(i.amount)}</div>
-    ${i.done
-      ? `<button class="btn sm" data-act="unmarkPlan" data-key="${i.key}" data-ym="${i.ym || i.date.slice(0, 7)}" title="Нажмите, если нужно отменить отметку">✓ ${isInc ? 'Получен' : 'Оплачен'}</button>`
-      : `<div style="display:flex;gap:4px">
-          <button class="btn sm ${over ? 'danger' : 'primary'}" data-act="planDo" data-key="${i.key}" data-date="${i.date}">${isInc ? 'Получил' : 'Оплатить'}</button>
-          <button class="btn sm" data-act="markPlanSilent" data-key="${i.key}" data-ym="${i.ym || i.date.slice(0, 7)}" title="Отметить как уже оплаченный/полученный ранее (без изменения баланса счёта)">✓ Уже</button>
-        </div>`}
+  return `<div class="plan-item ${i.done ? 'done' : ''}">
+    <div class="plan-item-top">
+      <div class="ico" style="width:42px;height:42px;border-radius:14px;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:20px;flex:none">${i.icon}</div>
+      <div class="grow">
+        <div style="font-weight:650;font-size:15px">${esc(i.name)}</div>
+        <div class="small ${over ? 'neg' : 'muted'}">${fmtDate(i.date)} · ${kindN}${over ? ' · ждёт оплаты' : ''}</div>
+      </div>
+      <div style="font-weight:750;font-size:15.5px;white-space:nowrap" class="${isInc ? 'pos' : ''}">${isInc ? '+' : '−'}${money(i.amount)}</div>
+    </div>
+    <div class="plan-item-actions">
+      ${i.done
+        ? `<button class="btn sm" data-act="unmarkPlan" data-key="${i.key}" data-ym="${i.ym || i.date.slice(0, 7)}">✅ ${isInc ? 'Получено' : 'Оплачено'} (нажмите для отмены)</button>`
+        : `<button class="btn sm ${over ? 'danger' : 'primary'}" data-act="planDo" data-key="${i.key}" data-date="${i.date}">${isInc ? '💰 Получил на счёт' : '💳 Оплатить со счёта'}</button>
+           <button class="btn sm" data-act="markPlanSilent" data-key="${i.key}" data-ym="${i.ym || i.date.slice(0, 7)}">✓ Уже ${isInc ? 'получил' : 'оплачен'}</button>`}
+    </div>
   </div>`;
 }
 
@@ -47,117 +53,110 @@ function txRow(t) {
   </div>`;
 }
 
-/* =================== ГЛАВНАЯ =================== */
-function startCard() {
-  if (S.settings.startDismissed) return '';
-  const steps = [
-    [S.incomes.length > 0, 'Добавьте зарплату и аванс (суммы и дни выплат)', 'plans'],
-    [S.debts.length > 0, 'Внесите кредиты, рассрочки, кредитки и долги', 'debts'],
-    [S.bills.length > 0, 'Добавьте обязательные платежи: аренда, связь, коммуналка', 'plans'],
-    [S.transactions.some(t => t.type === 'expense' && !t.plan && !t.debtId), 'Записывайте каждую трату кнопкой «+»', 'quick'],
-  ];
-  if (steps.every(s => s[0])) return '';
-  return `<section class="card">
-    <div class="card-title">🚀 Быстрый старт <button class="link" data-act="dismissStart">Скрыть</button></div>
-    ${steps.map(([ok, text, go], n) => `<div class="row" ${ok ? '' : `data-act="startStep" data-go="${go}"`}>
-      <div class="ico">${ok ? '✅' : n + 1}</div><div class="grow" style="white-space:normal">${text}</div>${ok ? '' : '<span class="muted">›</span>'}</div>`).join('')}
-  </section>`;
-}
-
+/* =================== 1. ГЛАВНАЯ (ЧИСТАЯ И ПОНЯТНАЯ) =================== */
 function viewHome() {
-  const f = forecast(); const now = new Date();
-  const mTx = S.transactions.filter(t => t.date.slice(0, 7) === ym(now));
-  const inc = sum(mTx.filter(t => t.type === 'income'), 'amount');
-  const exp = sum(mTx.filter(t => t.type === 'expense'), 'amount');
+  const f = forecast();
+  const now = new Date();
   let h = '';
 
-  const lb = S.settings.lastBackup;
-  if (S.transactions.length >= 15 && (!lb || Date.now() - lb > 7 * 864e5)) {
-    h += `<div class="alert wn">💾 ${lb ? 'Резервная копия делалась ' + Math.floor((Date.now() - lb) / 864e5) + ' дн. назад.' : 'Вы ещё не делали резервную копию.'} Данные хранятся только на этом телефоне — сохраните копию (в Telegram, Google Диск, почту).
-      <div class="btns"><button class="btn sm primary" data-act="backup">Сохранить копию</button></div></div>`;
-  }
-  h += startCard();
-
+  // 1. ГЛАВНАЯ КАРТОЧКА: ДЕНЬГИ СЕЙЧАС + СКОЛЬКО ОСТАНЕТСЯ ПОСЛЕ ДОЛГОВ
   h += `<section class="card hero">
-    <div class="row-between" style="align-items:center"><span class="muted">Всего денег сейчас</span><button class="link" style="color:#fff;font-size:12.5px;opacity:.9" data-act="sub" data-sub="accounts">Изменить баланс ›</button></div>
+    <div class="row-between">
+      <span class="muted" style="font-size:13.5px">Всего денег сейчас</span>
+      <button class="link" style="color:#fff;font-size:13px;opacity:.9" data-act="sub" data-sub="accounts">Изменить баланс ›</button>
+    </div>
     <div class="big ${f.total < 0 ? 'neg' : ''}">${money(f.total)}</div>
-    <div class="acc-chips">${S.accounts.map(a => `<div class="acc-chip" data-act="editAccount" data-id="${a.id}"><span>${a.icon} ${esc(a.name)}${a.inTotal === false ? ' 🔒' : ''}</span><b>${money(f.b[a.id])}</b></div>`).join('')}</div>
-  </section>`;
-
-  if (f.overdue.length) {
-    h += `<div class="alert">⚠️ <b>Не отмечено ${f.overdue.length} ${plural(f.overdue.length, ['платёж', 'платежа', 'платежей'])}</b> на ${money(sum(f.overdue, 'amount'))}. Если вы уже оплатили их раньше — нажмите кнопку <b>«✓ Уже»</b> в списке ниже.</div>`;
-  }
-
-  const pct = f.daily > 0 ? f.spentToday / f.daily * 100 : (f.spentToday > 0 ? 100 : 0);
-  const leftToday = r2(f.daily - f.spentToday);
-  h += `<section class="card">
-    <div class="card-title">💡 Можно тратить в день</div>
-    <div class="big2 ${f.daily < 0 ? 'neg' : ''}">${money(Math.max(0, f.daily))}</div>
-    <div class="muted small">${f.nextInc ? `до «${esc(f.nextInc.name)}» ${fmtDate(f.nextInc.date)} — ${f.days} ${plural(f.days, DAY_FORMS)}` : `до конца месяца — ${f.days} ${plural(f.days, DAY_FORMS)}. <a href="#" data-act="sub" data-sub="plans">Добавьте ЗП</a>, чтобы прогноз был точнее`}</div>
-    ${progressBar(pct, pctColor(pct))}
-    <div class="row-between small"><span>Сегодня потрачено: <b>${money(f.spentToday)}</b></span>
-      <span class="${leftToday < 0 ? 'neg' : 'muted'}">${f.daily > 0 ? (leftToday >= 0 ? 'осталось ' + money(leftToday) : 'перерасход ' + money(-leftToday)) : ''}</span></div>
-    ${f.daily < 0 ? `<div class="alert mt">Денег не хватает на неоплаченные обязательные платежи до следующего дохода: не хватает <b>${money(-f.free)}</b>. (Если какой-то кредит за этот месяц уже оплачен — отметьте его кнопкой «✓ Уже»).</div>` : ''}
-    <div class="divider"></div>
-    <div class="kv"><span>Ещё оплатить до ${f.nextInc ? 'ЗП' : 'конца месяца'}</span><b>${money(f.oblBefore)}</b></div>
-    <div class="kv total"><span>Останется после всех платежей</span><b class="${f.free < 0 ? 'neg' : 'pos'}">${money(f.free)}</b></div>
-  </section>`;
-
-  h += `<section class="card">
-    <div class="card-title">📅 ${cap(MONTHS[now.getMonth()])}: прогноз на конец месяца</div>
-    <div class="kv"><span>Деньги сейчас</span><b>${money(f.total)}</b></div>
-    <div class="kv"><span>Ещё придёт доходов</span><b class="pos">+${money(f.incMonth)}</b></div>
-    <div class="kv"><span>Ещё оплатить (кредиты, долги, счета)</span><b class="neg">−${money(f.oblMonth)}</b></div>
-    <div class="kv total"><span>Останется к концу месяца</span><b class="${f.endMonth < 0 ? 'neg' : 'pos'}">${money(f.endMonth)}</b></div>
-    ${f.avgDaily > 0 ? `<div class="kv"><span>С учётом обычных трат (~${money(f.avgDaily)}/день)</span><b class="${f.endMonthReal < 0 ? 'neg' : ''}">${money(f.endMonthReal)}</b></div>` : ''}
-    <div class="stats mt">
-      <div class="stat"><span>Доходы за месяц</span><b class="pos">${money(inc)}</b></div>
-      <div class="stat"><span>Расходы за месяц</span><b>${money(exp)}</b></div>
+    <div class="acc-chips">
+      ${S.accounts.map(a => `<div class="acc-chip" data-act="editAccount" data-id="${a.id}">
+        <span>${a.icon} ${esc(a.name)}${a.inTotal === false ? ' 🔒' : ''}</span>
+        <b>${money(f.b[a.id])}</b>
+      </div>`).join('')}
+    </div>
+    <div class="hero-summary">
+      <div class="hero-box">
+        <span>Оплатить по долгам/счетам</span>
+        <b>−${money(f.oblMonth)}</b>
+      </div>
+      <div class="hero-box">
+        <span>Чистый остаток денег</span>
+        <b style="color:${f.total - f.oblMonth < 0 ? '#fecaca' : '#86efac'}">${money(f.total - f.oblMonth)}</b>
+      </div>
     </div>
   </section>`;
 
-  const lim = toISO(addDays(now, 14));
-  const upcoming = f.all.filter(i => i.date <= lim);
-  h += `<section class="card"><div class="card-title">🗓 Ближайшие 14 дней <button class="link" data-act="sub" data-sub="plans">Все</button></div>
-    ${upcoming.length ? `<div class="list">${upcoming.map(planRow).join('')}</div>` : emptyBox('😌', S.incomes.length + S.bills.length + S.debts.length ? 'Все ближайшие платежи оплачены!' : 'Добавьте доходы, кредиты и обязательные платежи — здесь появится календарь')}
+  // 2. СКОЛЬКО МОЖНО ТРАТИТЬ В ДЕНЬ + БЫСТРАЯ КНОПКА ЗАПИСИ ТРАТЫ
+  const pct = f.daily > 0 ? f.spentToday / f.daily * 100 : (f.spentToday > 0 ? 100 : 0);
+  const leftToday = r2(f.daily - f.spentToday);
+  h += `<section class="card">
+    <div class="card-title">
+      <span>💡 Можно тратить в день</span>
+      <span class="badge ${leftToday < 0 ? 'bad' : 'ok'}">${f.days} ${plural(f.days, DAY_FORMS)} ${f.nextInc ? 'до ЗП' : 'до конца мес.'}</span>
+    </div>
+    <div class="big2 ${f.daily < 0 ? 'neg' : ''}">${money(Math.max(0, f.daily))}</div>
+    ${progressBar(pct, pctColor(pct))}
+    <div class="row-between small">
+      <span>Потрачено сегодня: <b>${money(f.spentToday)}</b></span>
+      <span class="${leftToday < 0 ? 'neg' : 'pos'}">${f.daily > 0 ? (leftToday >= 0 ? 'свободно сегодня ' + money(leftToday) : 'перерасход ' + money(-leftToday)) : ''}</span>
+    </div>
+    <div class="btns">
+      <button class="btn primary" data-act="quickAdd">➕ Записать трату</button>
+      <button class="btn" data-act="quickAddIncome">💰 + Доход</button>
+    </div>
   </section>`;
 
-  const cats = byCategory(mTx.filter(t => t.type === 'expense'));
-  const warn = Object.entries(S.budgets).filter(([, l]) => +l > 0).map(([id, l]) => {
-    const sp = sum(mTx.filter(t => t.type === 'expense' && t.categoryId === id), 'amount');
-    return { c: cat(id), l: +l, sp, p: sp / l * 100 };
-  }).filter(x => x.c && x.p >= 80).sort((a, b) => b.p - a.p);
-  if (warn.length) {
-    h += `<div class="alert wn"><b>Бюджеты:</b> ${warn.map(w => `${w.c.icon} ${esc(w.c.name)} — ${Math.round(w.p)}% (${money(w.sp)} из ${money(w.l)})`).join('<br>')}</div>`;
-  }
-  if (cats.length) {
-    const max = cats[0].v;
-    h += `<section class="card"><div class="card-title">📊 Куда ушли деньги в этом месяце <button class="link" data-tab="reports">Отчёт</button></div>
-      ${cats.slice(0, 5).map(x => `<div style="margin-bottom:8px"><div class="row-between small"><span>${x.c.icon} ${esc(x.c.name)}</span><b>${money(x.v)}</b></div>
-      <div class="progress thin"><i style="width:${x.v / max * 100}%;background:${x.c.color}"></i></div></div>`).join('')}
-    </section>`;
-  }
+  // 3. БЛИЖАЙШИЕ ПЛАТЕЖИ (ТОЛЬКО НЕОПЛАЧЕННЫЕ, ЧТОБЫ НЕ ЗАСОРЯТЬ ЭКРАН)
+  const unpaidMonth = f.cur.filter(i => !i.done);
+  h += `<section class="card">
+    <div class="card-title">
+      <span>🗓 План на ${MONTHS[now.getMonth()]}</span>
+      <button class="link" data-act="sub" data-sub="plans">Настроить ЗП и счета ›</button>
+    </div>
+    ${unpaidMonth.length
+      ? `<div class="list">${unpaidMonth.slice(0, 5).map(planRow).join('')}</div>`
+      : emptyBox('✅', S.incomes.length + S.bills.length + S.debts.length
+          ? 'Все платежи этого месяца уже закрыты!'
+          : 'Добавьте вашу зарплату в «Настроить ЗП и счета» и ваши кредиты во вкладке «Долги»')}
+  </section>`;
 
+  // 4. СВОДКА ДОЛГОВ (КОМПАКТНАЯ КАРТОЧКА-ПЕРЕХОД)
   const owe = activeOweDebts();
   if (owe.length) {
     const totalOwe = sum(owe.map(debtRemaining));
     const monthly = sum(owe, 'payment');
     h += `<section class="card" data-act="goTab" data-tab2="debts" style="cursor:pointer">
-      <div class="card-title">🏦 Долги и кредиты <span class="link">Подробнее ›</span></div>
-      <div class="stats"><div class="stat"><span>Всего долг</span><b class="neg">${money(totalOwe)}</b></div>
-      <div class="stat"><span>Платежи в месяц</span><b>${money(monthly)}</b></div></div></section>`;
+      <div class="card-title"><span>🏦 Активные долги (${owe.length})</span><span class="link">Открыть ›</span></div>
+      <div class="stats">
+        <div class="stat"><span>Общий остаток</span><b class="neg">${money(totalOwe)}</b></div>
+        <div class="stat"><span>Платежи в месяц</span><b>${money(monthly)}</b></div>
+      </div>
+    </section>`;
   }
+
+  // 5. РАСКРЫВАЮЩИЙСЯ ПОДРОБНЫЙ ПРОГНОЗ НА КОНЕЦ МЕСЯЦА (НЕ МЕШАЕТ, ПОКА НЕ НУЖЕН)
+  h += `<details class="clean-details">
+    <summary>🔮 Подробный расчёт до конца месяца</summary>
+    <div class="mt">
+      <div class="kv"><span>Деньги сейчас</span><b>${money(f.total)}</b></div>
+      <div class="kv"><span>Ещё придёт ЗП / доходов</span><b class="pos">+${money(f.incMonth)}</b></div>
+      <div class="kv"><span>Ещё оплатить в этом месяце</span><b class="neg">−${money(f.oblMonth)}</b></div>
+      <div class="kv total"><span>Останется к концу месяца</span><b class="${f.endMonth < 0 ? 'neg' : 'pos'}">${money(f.endMonth)}</b></div>
+      ${f.avgDaily > 0 ? `<div class="kv"><span>С учётом ежедневных трат (~${money(f.avgDaily)}/дн)</span><b class="${f.endMonthReal < 0 ? 'neg' : ''}">${money(f.endMonthReal)}</b></div>` : ''}
+    </div>
+  </details>`;
+
   return h;
 }
 
-/* =================== ОПЕРАЦИИ =================== */
+/* =================== 2. ОПЕРАЦИИ =================== */
 function viewOps() {
   const m = nav.opsMonth;
-  return `<div class="month-switch"><button class="icon-btn" data-act="opsMonth" data-d="-1">‹</button>
+  return `<div class="month-switch">
+      <button class="icon-btn" data-act="opsMonth" data-d="-1">‹</button>
       <b>${cap(MONTHS[m.getMonth()])} ${m.getFullYear()}</b>
-      <button class="icon-btn" data-act="opsMonth" data-d="1">›</button></div>
-    <input class="search" id="opsSearch" placeholder="🔍 Поиск: комментарий, категория, сумма" value="${esc(nav.q)}">
-    <div class="chips">${[['all', 'Все'], ['expense', 'Расходы'], ['income', 'Доходы'], ['transfer', 'Переводы'], ['debt', 'Платежи по долгам']].map(([k, l]) => `<button class="chip ${nav.opsType === k ? 'active' : ''}" data-act="opsType" data-v="${k}">${l}</button>`).join('')}</div>
+      <button class="icon-btn" data-act="opsMonth" data-d="1">›</button>
+    </div>
+    <input class="search" id="opsSearch" placeholder="🔍 Поиск по записям…" value="${esc(nav.q)}">
+    <div class="chips">${[['all', 'Все'], ['expense', 'Расходы'], ['income', 'Доходы'], ['debt', 'Кредиты'], ['transfer', 'Переводы']].map(([k, l]) => `<button class="chip ${nav.opsType === k ? 'active' : ''}" data-act="opsType" data-v="${k}">${l}</button>`).join('')}</div>
     <div id="opsList">${opsListHTML()}</div>`;
 }
 function opsListHTML() {
@@ -168,17 +167,17 @@ function opsListHTML() {
   if (q) list = list.filter(t => [t.note, cat(t.categoryId)?.name, acc(t.accountId)?.name, debtById(t.debtId)?.name, String(t.amount)].join(' ').toLowerCase().includes(q));
   list.sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
   const inc = sum(list.filter(t => t.type === 'income'), 'amount'), exp = sum(list.filter(t => t.type === 'expense'), 'amount');
-  let h = `<div class="stats" style="grid-template-columns:repeat(3,1fr);margin-bottom:6px">
-    <div class="stat"><span>Доходы</span><b class="pos">${moneyShort(inc)}</b></div>
-    <div class="stat"><span>Расходы</span><b>${moneyShort(exp)}</b></div>
-    <div class="stat"><span>Итог</span><b class="${inc - exp < 0 ? 'neg' : 'pos'}">${moneyShort(inc - exp)}</b></div></div>`;
-  if (!list.length) return h + emptyBox('🧾', 'Операций нет. Нажмите «+», чтобы записать трату или доход.');
+  let h = `<div class="stats" style="margin-bottom:10px">
+    <div class="stat"><span>Расходы за месяц</span><b>−${money(exp)}</b></div>
+    <div class="stat"><span>Доходы за месяц</span><b class="pos">+${money(inc)}</b></div>
+  </div>`;
+  if (!list.length) return h + emptyBox('🧾', 'Записей пока нет. Нажмите синюю кнопку «+», чтобы записать трату.');
   const groups = {};
   list.forEach(t => (groups[t.date] = groups[t.date] || []).push(t));
   h += Object.entries(groups).map(([d, arr]) => {
     const dayExp = sum(arr.filter(t => t.type === 'expense'), 'amount');
     return `<div class="day-head"><span>${fmtDayHead(d)}</span><span>${dayExp ? '−' + money(dayExp) : ''}</span></div>
-      <div class="card" style="padding:4px 12px;margin-bottom:4px"><div class="list">${arr.map(txRow).join('')}</div></div>`;
+      <div class="card" style="padding:4px 14px;margin-bottom:6px"><div class="list">${arr.map(txRow).join('')}</div></div>`;
   }).join('');
   return h;
 }
@@ -187,7 +186,7 @@ function afterOps() {
   if (s) s.oninput = () => { nav.q = s.value; $('#opsList').innerHTML = opsListHTML(); };
 }
 
-/* =================== ДОЛГИ =================== */
+/* =================== 3. ДОЛГИ И КРЕДИТЫ (ЧИСТЫЕ КАРТОЧКИ) =================== */
 function debtCard(d) {
   const rem = debtRemaining(d);
   const total = +d.total || rem;
@@ -197,33 +196,47 @@ function debtCard(d) {
   const po = +d.payment > 0 ? debtPayoffInfo(d) : null;
   const curYM = ym(new Date());
   const monthDone = isPlanDone('debt:' + d.id, curYM);
-  let closeTxt;
-  if (rem <= 0) closeTxt = '<span class="pos">Полностью закрыт 🎉</span>';
-  else if (!po) closeTxt = '<span class="muted">Без графика — укажите платёж в месяц, чтобы увидеть дату закрытия</span>';
-  else if (po.never) closeTxt = '<span class="neg">⚠️ Платёж меньше начисляемых процентов — долг не уменьшается!</span>';
-  else closeTxt = `Осталось платежей: <b>${po.months} (${po.months} ${plural(po.months, MONTH_FORMS)})</b> · закроется в <b>${fmtMonthYear(po.date)}</b>${po.interest > 0 ? `<br><span class="muted">Проценты сверху: ${money(po.interest)}</span>` : ''}`;
+
+  let closeSummary = 'Без ежемесячного графика';
+  if (rem <= 0) closeSummary = 'Полностью закрыт 🎉';
+  else if (po && po.never) closeSummary = '⚠️ Платёж меньше %';
+  else if (po) closeSummary = `Осталось ${po.months} ${plural(po.months, MONTH_FORMS)} (до ${fmtMonthYear(po.date)})`;
 
   return `<section class="card debt">
-    <div class="head"><div class="ico">${k.i}</div>
-      <div class="grow" style="min-width:0"><div style="font-weight:650">${esc(d.name)}</div><div class="muted small">${k.n}${d.note ? ' · ' + esc(d.note) : ''}</div></div>
-      ${!lent && +d.payment > 0 && rem > 0 ? (monthDone
-        ? `<button class="badge ok" style="border:0;cursor:pointer" data-act="unmarkPlan" data-key="debt:${d.id}" data-ym="${curYM}" title="Нажмите, чтобы снять отметку оплаты за этот месяц">✓ оплачен в ${MONTHS_SHORT[new Date().getMonth()]}</button>`
-        : `<span class="badge wn">ждёт оплаты</span>`) : ''}
+    <div class="head">
+      <div class="ico">${k.i}</div>
+      <div class="grow">
+        <div style="font-weight:700;font-size:16.5px">${esc(d.name)}</div>
+        <div class="muted small">${k.n}${d.payDay ? ` · оплата ${d.payDay}-го числа` : ''}</div>
+      </div>
+      ${!lent && +d.payment > 0 && rem > 0
+        ? (monthDone
+            ? `<button class="badge ok" style="border:0;cursor:pointer" data-act="unmarkPlan" data-key="debt:${d.id}" data-ym="${curYM}">✓ Оплачен</button>`
+            : `<span class="badge wn">К оплате</span>`)
+        : ''}
     </div>
-    <div class="row-between" style="margin-top:12px;align-items:baseline"><div><div class="muted small">${lent ? 'Вам должны' : 'Осталось выплатить'}</div><div class="rem ${lent ? 'pos' : ''}">${money(rem)}</div></div>
-      <div class="muted small" style="text-align:right">из ${money(total)}<br>${lent ? 'возвращено' : 'выплачено'} ${Math.round(paidPct)}%</div></div>
-    ${progressBar(paidPct, 'var(--pos)')}
-    <div class="meta">
-      <div>Платёж/мес<b>${+d.payment ? money(d.payment) : '—'}</b></div>
-      <div>Число<b>${d.payDay ? d.payDay + '-е' : '—'}</b></div>
-      <div>Расчёт<b>${d.calcMode === 'bank' && +d.rate > 0 ? d.rate + '% годовых' : 'по графику'}</b></div>
+
+    <div class="debt-pills">
+      <div class="debt-pill">
+        <span>${lent ? 'Мне должны' : 'Остаток долга'}</span>
+        <b class="${lent ? 'pos' : ''}" style="font-size:17px">${money(rem)}</b>
+      </div>
+      <div class="debt-pill">
+        <span>Платёж в месяц</span>
+        <b style="font-size:17px">${+d.payment ? money(d.payment) : '—'}</b>
+      </div>
     </div>
-    <div class="close-txt">${closeTxt}</div>
+
+    ${total > rem ? progressBar(paidPct, 'var(--pos)') : '<div style="height:6px"></div>'}
+    <div class="row-between small">
+      <span>📅 <b>${closeSummary}</b></span>
+      ${total > rem ? `<span class="muted">выплачено ${Math.round(paidPct)}%</span>` : ''}
+    </div>
+
     <div class="btns">
-      ${rem > 0 ? `<button class="btn sm primary" data-act="payDebt" data-id="${d.id}">${lent ? '💰 Мне вернули' : '💳 Оплатить со счёта'}</button>` : ''}
-      ${!lent && +d.payment > 0 && rem > 0 && !monthDone ? `<button class="btn sm" data-act="markPlanSilent" data-key="debt:${d.id}" data-ym="${curYM}" title="Если за этот месяц вы уже заплатили ранее и остаток уже указан с учётом этой оплаты">✓ Уже оплачен в ${MONTHS_SHORT[new Date().getMonth()]}</button>` : ''}
-      <button class="btn sm" data-act="debtHistory" data-id="${d.id}">История</button>
-      <button class="btn sm" data-act="editDebt" data-id="${d.id}">Изменить</button>
+      ${rem > 0 ? `<button class="btn sm primary" data-act="payDebt" data-id="${d.id}">${lent ? '💰 Вернули' : '💳 Оплатить'}</button>` : ''}
+      ${!lent && +d.payment > 0 && rem > 0 && !monthDone ? `<button class="btn sm" data-act="markPlanSilent" data-key="debt:${d.id}" data-ym="${curYM}">✓ Уже оплачен</button>` : ''}
+      <button class="btn sm" style="flex:0 0 auto" data-act="editDebt" data-id="${d.id}">⚙️ Изменить</button>
     </div>
   </section>`;
 }
@@ -233,7 +246,7 @@ function viewDebts() {
   const lent = S.debts.filter(d => !d.closed && d.kind === 'lent');
   const closed = S.debts.filter(d => d.closed);
   if (!S.debts.length) {
-    return `<section class="card">${emptyBox('🏦', 'Здесь будут все ваши кредиты, ипотека, рассрочки, кредитки, микрозаймы, долги людям — и кто должен вам.<br><br>Приложение точно посчитает, сколько месяцев осталось, когда закроется каждый долг и сколько останется денег после оплаты.')}
+    return `<section class="card">${emptyBox('🏦', 'Добавьте ваши кредиты, рассрочки, кредитки или долги людям.<br><br>Вы сразу увидите, сколько месяцев осталось платить, когда каждый долг закроется и сколько денег остаётся после их оплаты.')}
       <button class="btn primary block" data-act="addDebt">+ Добавить долг или кредит</button></section>`;
   }
   const act = owe.filter(d => debtRemaining(d) > 0);
@@ -241,34 +254,25 @@ function viewDebts() {
   const monthly = sum(act, 'payment');
   const curYM = ym(new Date());
   const unpaidThisMonth = sum(act.filter(d => !isPlanDone('debt:' + d.id, curYM)), 'payment');
-  const income = sum(S.incomes.filter(i => i.active !== false), 'amount');
-  const pdn = income > 0 ? monthly / income * 100 : null;
   const infos = act.map(d => +d.payment > 0 ? debtPayoffInfo(d) : null);
-  const anyNever = infos.some(p => p && p.never);
-  const noSched = infos.some(p => !p);
   const freedom = infos.filter(p => p && p.date).reduce((m, p) => !m || p.date > m ? p.date : m, null);
+
   let h = '';
   if (act.length) {
-    let pdnTxt = '', pdnCls = '';
-    if (pdn != null) {
-      if (pdn < 30) { pdnCls = 'pos'; pdnTxt = 'Нормальная нагрузка'; }
-      else if (pdn < 50) { pdnCls = 'warn'; pdnTxt = 'Высокая — новые кредиты не берите'; }
-      else { pdnCls = 'neg'; pdnTxt = 'Критическая! >50% дохода уходит на долги'; }
-    }
     h += `<section class="card">
-      <div class="card-title">📌 Сводка по долгам</div>
       <div class="stats">
         <div class="stat"><span>Всего осталось</span><b class="neg">${money(totalOwe)}</b></div>
-        <div class="stat"><span>Платежи по графику</span><b>${money(monthly)}/мес</b></div>
-        <div class="stat"><span>Осталось в этом мес.</span><b class="${unpaidThisMonth > 0 ? 'warn' : 'pos'}">${unpaidThisMonth > 0 ? money(unpaidThisMonth) : 'Всё оплачено ✓'}</b></div>
-        <div class="stat"><span>Полное закрытие</span><b>${anyNever ? '∞' : freedom ? cap(fmtMonthYear(freedom)) : '—'}</b></div>
+        <div class="stat"><span>Платежи в месяц</span><b>${money(monthly)}</b></div>
+        <div class="stat"><span>Ещё платить в ${MONTHS_SHORT[new Date().getMonth()]}.</span><b class="${unpaidThisMonth > 0 ? 'warn' : 'pos'}">${unpaidThisMonth > 0 ? money(unpaidThisMonth) : '0 (всё оплачено)'}</b></div>
+        <div class="stat"><span>Полное закрытие</span><b>${freedom ? cap(fmtMonthYear(freedom)) : '—'}</b></div>
       </div>
-      ${pdn != null ? `<div class="mt"><div class="row-between small"><span>Долговая нагрузка (ПДН): <b class="${pdnCls}">${Math.round(pdn)}%</b> дохода</span><span class="${pdnCls}">${pdnTxt}</span></div>${progressBar(pdn, pdnCls === 'pos' ? 'var(--pos)' : pdnCls === 'warn' ? 'var(--warn)' : 'var(--neg)')}</div>` : '<div class="muted small mt">Добавьте доходы в «Ещё → Доходы и платежи», чтобы увидеть долговую нагрузку.</div>'}
-      ${noSched ? '<div class="muted small mt">У некоторых долгов не указан платёж в месяц — они не учтены в дате закрытия.</div>' : ''}
     </section>`;
   }
   h += owe.map(debtCard).join('');
-  if (act.length >= 1) h += strategyCard();
+
+  if (act.length >= 2) {
+    h += `<details class="clean-details"><summary>🧠 Стратегия быстрого закрытия долгов</summary><div class="mt">${strategyInnerHTML()}</div></details>`;
+  }
   if (lent.length) {
     h += `<div class="day-head" style="font-size:15px;color:var(--text)"><span>💸 Мне должны: ${money(sum(lent.map(debtRemaining)))}</span></div>` + lent.map(debtCard).join('');
   }
@@ -279,35 +283,25 @@ function viewDebts() {
   return h;
 }
 
-function strategyCard() {
-  const act = activeOweDebts().filter(d => +d.payment > 0);
-  if (!act.length) return '';
-  const base = simulateAll(0, 'avalanche');
+function strategyInnerHTML() {
   const extra = nav.extra || 0;
   const av = simulateAll(extra, 'avalanche'), sn = simulateAll(extra, 'snowball');
   const now = new Date();
   const res = (r, title, desc) => {
-    if (r.never) return `<div><h4>${title}</h4><div class="neg small">Не погасится — увеличьте платежи</div></div>`;
-    const saved = base.never ? 0 : r2(base.interest - r.interest);
+    if (r.never) return `<div><h4>${title}</h4><div class="neg small">Увеличьте платежи</div></div>`;
     return `<div><h4>${title}</h4><div class="muted small">${desc}</div>
-      <div class="mt"><b>${r.months} ${plural(r.months, MONTH_FORMS)}</b> → ${fmtMonthYear(addMonths(now, r.months - 1))}</div>
-      ${r.interest > 0 ? `<div class="small">Проценты: ${money(r.interest)}</div>` : ''}
-      ${saved > 0 ? `<div class="small pos">Экономия: ${money(saved)}</div>` : ''}
-      <ol>${r.order.map(x => `<li>${esc(x.name)} — ${x.closedAt} мес.</li>`).join('')}</ol></div>`;
+      <div class="mt"><b>Закроются все за ${r.months} ${plural(r.months, MONTH_FORMS)}</b> (${fmtMonthYear(addMonths(now, r.months - 1))})</div>
+      <ol>${r.order.map(x => `<li>${esc(x.name)} — через ${x.closedAt} мес.</li>`).join('')}</ol></div>`;
   };
-  return `<section class="card">
-    <div class="card-title">🧠 Как закрыть все долги быстрее</div>
-    <div class="muted small">Когда один кредит закрывается, освободившийся платёж направляйте на следующий («снежный ком»). А если добавлять сверху хотя бы небольшую сумму — срок сократится ещё сильнее:</div>
-    <div class="field mt"><span>Могу доплачивать сверху в месяц</span><input class="inp" id="extraInp" inputmode="decimal" value="${extra || ''}" placeholder="например 5000"></div>
-    <div class="mt"></div>
-    <div class="strategy">
-      ${res(av, '🏔 Лавина', 'Сначала самая высокая ставка — меньше переплата')}
-      ${res(sn, '⛄ Снежный ком', 'Сначала самый маленький остаток — быстрее виден результат')}
-    </div>
-  </section>`;
+  return `<div class="muted small">Когда один кредит закрывается, направляйте его платёж на следующий:</div>
+    <div class="field mt"><span>Если добавлять сверху в месяц:</span><input class="inp" id="extraInp" inputmode="decimal" value="${extra || ''}" placeholder="0"></div>
+    <div class="strategy mt">
+      ${res(sn, '⛄ Снежный ком (рекомендуется)', 'Сначала самый маленький долг — быстрое избавление от мелких кредитов')}
+      ${res(av, '🏔 Лавина', 'Сначала кредит с самой высокой ставкой')}
+    </div>`;
 }
 
-/* =================== ОТЧЁТЫ =================== */
+/* =================== 4. ОТЧЁТЫ =================== */
 function donutSVG(parts, top, bottom) {
   const total = sum(parts, 'value'); const R = 70, C = 2 * Math.PI * R; let off = 0;
   const segs = total > 0 ? parts.map(p => {
@@ -329,7 +323,7 @@ function barsHTML(list, from, to) {
     while (d <= end) { const k = ym(d); buckets.push({ k: fmtMonthYear(d), label: MONTHS_SHORT[d.getMonth()], v: map[k] || 0 }); d = addMonths(d, 1); }
   }
   const max = Math.max(0, ...buckets.map(b => b.v));
-  const step = Math.ceil(buckets.length / 10);
+  const step = Math.ceil(buckets.length / 8);
   return `<div class="bars">${buckets.map((b, i) => `<div class="bar" title="${esc(b.k)}: ${esc(money(b.v))}"><i style="height:${max ? b.v / max * 100 : 0}%"></i><span>${i % step === 0 ? b.label : ''}</span></div>`).join('')}</div>`;
 }
 
@@ -348,92 +342,59 @@ function viewReports() {
   const today = todayStr();
   const elapsed = Math.max(1, diffDays(R.from, R.to < today ? R.to : today) + 1);
   const avg = R.exp / elapsed;
-  const prevExp = sum(R.prevExps, 'amount');
   const small = R.exps.filter(t => !t.debtId && !t.plan && t.amount <= (+S.settings.smallLimit || 0));
   const smallSum = sum(small, 'amount');
-  const debtPaid = sum(R.exps.filter(t => t.debtId), 'amount');
-  const savingsRate = R.inc > 0 ? (R.inc - R.exp) / R.inc * 100 : null;
-  const prevMap = {}; R.prevCats.forEach(x => prevMap[x.id] = x.v);
 
-  let h = `<div class="chips">${[['month', 'Этот месяц'], ['prev', 'Прошлый'], ['3m', '3 месяца'], ['year', 'Год'], ['all', 'Всё время'], ['custom', 'Период…']].map(([k, l]) => `<button class="chip ${nav.rp === k ? 'active' : ''}" data-act="rp" data-v="${k}">${l}</button>`).join('')}</div>`;
+  let h = `<div class="chips">${[['month', 'Этот месяц'], ['prev', 'Прошлый'], ['3m', '3 месяца'], ['year', 'Год'], ['all', 'Всё время'], ['custom', 'Даты…']].map(([k, l]) => `<button class="chip ${nav.rp === k ? 'active' : ''}" data-act="rp" data-v="${k}">${l}</button>`).join('')}</div>`;
   if (nav.rp === 'custom') {
-    h += `<div class="grid2" style="margin-bottom:10px"><label class="field"><span>С</span><input type="date" data-rdate="rFrom" value="${R.from}"></label><label class="field"><span>По</span><input type="date" data-rdate="rTo" value="${R.to}"></label></div>`;
+    h += `<div class="grid2" style="margin-bottom:12px"><label class="field"><span>С</span><input type="date" data-rdate="rFrom" value="${R.from}"></label><label class="field"><span>По</span><input type="date" data-rdate="rTo" value="${R.to}"></label></div>`;
   }
   h += `<section class="card"><div class="card-title">${esc(R.label)}</div>
     <div class="stats">
-      <div class="stat"><span>Доходы</span><b class="pos">${money(R.inc)}</b></div>
       <div class="stat"><span>Расходы</span><b>${money(R.exp)}</b></div>
-      <div class="stat"><span>Остаток (доходы − расходы)</span><b class="${R.inc - R.exp < 0 ? 'neg' : 'pos'}">${money(R.inc - R.exp)}</b></div>
+      <div class="stat"><span>Доходы</span><b class="pos">${money(R.inc)}</b></div>
       <div class="stat"><span>В среднем в день</span><b>${money(avg)}</b></div>
+      <div class="stat"><span>На мелочи (до ${money(S.settings.smallLimit)})</span><b>${money(smallSum)}</b></div>
     </div></section>`;
 
-  const ins = [];
-  if (savingsRate != null) ins.push(['🐷', savingsRate >= 20 ? `Вы сохранили <b>${Math.round(savingsRate)}%</b> дохода — отлично! Цель: 10–20% и больше.` : savingsRate >= 0 ? `Сохранено <b>${Math.round(savingsRate)}%</b> дохода. Старайтесь откладывать хотя бы 10%.` : `Расходы превысили доходы на <b>${money(R.exp - R.inc)}</b>. Срочно найдите, что сократить.`]);
-  if (smallSum > 0) ins.push(['🪙', `Мелкие траты (до ${money(S.settings.smallLimit)}): <b>${small.length} шт. на ${money(smallSum)}</b> — ${Math.round(smallSum / (R.exp || 1) * 100)}% расходов. В пересчёте на год это ≈ <b>${money(smallSum / elapsed * 365)}</b>.`]);
-  if (R.cats[0]) ins.push([R.cats[0].c.icon, `Больше всего ушло на «${esc(R.cats[0].c.name)}»: <b>${money(R.cats[0].v)}</b> (${Math.round(R.cats[0].v / R.exp * 100)}%).`]);
-  if (debtPaid > 0) ins.push(['🏦', `На кредиты и долги: <b>${money(debtPaid)}</b>${R.inc > 0 ? ` — ${Math.round(debtPaid / R.inc * 100)}% дохода` : ''}.`]);
-  if (prevExp > 0 && R.exp > 0) { const ch = (R.exp - prevExp) / prevExp * 100; ins.push([ch > 0 ? '📈' : '📉', `По сравнению с предыдущим периодом расходы ${ch > 0 ? 'выросли' : 'снизились'} на <b>${Math.abs(Math.round(ch))}%</b> (${money(prevExp)} → ${money(R.exp)}).`]); }
-  if (nav.rp === 'month' && R.exp > 0) ins.push(['🔮', `Если тратить в том же темпе, за месяц выйдет ≈ <b>${money(avg * dim(new Date()))}</b>.`]);
-  if (ins.length) h += `<section class="card"><div class="card-title">🧭 Анализ</div>${ins.map(([e, t]) => `<div class="insight"><span class="e">${e}</span><div>${t}</div></div>`).join('')}</section>`;
-
-  h += `<section class="card"><div class="card-title">🍩 Расходы по категориям</div>`;
+  h += `<section class="card"><div class="card-title">🍩 На что ушли деньги</div>`;
   if (R.cats.length) {
     h += `<div class="donut-wrap">${donutSVG(R.cats.map(x => ({ value: x.v, color: x.c.color })), moneyShort(R.exp), 'всего, ' + S.settings.currency)}</div><div class="list">`;
     h += R.cats.map(x => {
-      const p = x.v / R.exp * 100; const pv = prevMap[x.id] || 0; const ch = pv ? (x.v - pv) / pv * 100 : null;
-      const bud = +S.budgets[x.id] || 0;
+      const p = x.v / R.exp * 100;
       return `<div class="row" data-act="catDrill" data-id="${x.id}">
         <div class="ico" style="background:${x.c.color}22">${x.c.icon}</div>
         <div class="grow"><div class="t">${esc(x.c.name)}</div>
-          <div class="s">${p.toFixed(1)}%${ch != null && Math.abs(ch) >= 1 ? ` · <span class="${ch > 0 ? 'neg' : 'pos'}">${ch > 0 ? '▲' : '▼'}${Math.abs(Math.round(ch))}%</span>` : ''}${bud && nav.rp === 'month' ? ` · бюджет ${money(bud)}` : ''}</div>
+          <div class="s">${Math.round(p)}% от всех расходов</div>
           <div class="progress thin"><i style="width:${p}%;background:${x.c.color}"></i></div></div>
         <div class="amt">${money(x.v)}</div></div>`;
     }).join('') + '</div>';
-  } else h += emptyBox('📭', 'Нет расходов за этот период');
+  } else h += emptyBox('📭', 'За этот период расходов нет');
   h += `</section>`;
 
-  if (R.exps.length) h += `<section class="card"><div class="card-title">📆 Расходы по ${diffDays(R.from, R.to) <= 62 ? 'дням' : 'месяцам'}</div>${barsHTML(R.exps, R.from, R.to)}</section>`;
-
-  if (R.incCats.length) {
-    h += `<section class="card"><div class="card-title">💼 Доходы по источникам</div><div class="list">${R.incCats.map(x => `<div class="row"><div class="ico">${x.c.icon}</div><div class="grow"><div class="t">${esc(x.c.name)}</div></div><div class="amt pos">+${money(x.v)}</div></div>`).join('')}</div></section>`;
-  }
-
-  const top = R.exps.slice().sort((a, b) => b.amount - a.amount).slice(0, 10);
-  if (top.length) h += `<section class="card"><div class="card-title">🔝 Самые крупные траты</div><div class="list">${top.map(txRow).join('')}</div></section>`;
+  if (R.exps.length) h += `<section class="card"><div class="card-title">📆 График расходов</div>${barsHTML(R.exps, R.from, R.to)}</section>`;
 
   h += `<section class="card"><div class="card-title">📤 Выгрузить отчёт</div>
-    <div class="muted small">CSV открывается в Excel и Google Таблицах. PDF — через «Печать → Сохранить как PDF».</div>
     <div class="btns">
-      <button class="btn" data-act="exportCSV">📄 Операции (Excel)</button>
-      <button class="btn" data-act="exportCatCSV">📊 По категориям (Excel)</button>
-      <button class="btn" data-act="printReport">🖨 PDF / печать</button>
+      <button class="btn" data-act="exportCSV">📄 Excel (CSV)</button>
+      <button class="btn" data-act="printReport">🖨 PDF / Печать</button>
     </div></section>`;
   return h;
 }
 
-/* =================== ЕЩЁ =================== */
+/* =================== 5. МЕНЮ (ЕЩЁ) =================== */
 function viewMore() {
   const t = (sub, e, title, desc) => `<button class="tile" data-act="sub" data-sub="${sub}"><span class="e">${e}</span><b>${title}</b><span>${desc}</span></button>`;
   return `<div class="tiles">
-    ${t('plans', '💼', 'Доходы и платежи', 'ЗП, аванс, аренда, связь…')}
-    ${t('budgets', '🎯', 'Бюджеты', 'Лимиты по категориям')}
-    ${t('goals', '🐷', 'Цели', 'Подушка, накопления')}
-    ${t('accounts', '💳', 'Счета', 'Карты, наличные')}
-    ${t('categories', '🏷', 'Категории', 'Настроить под себя')}
-    ${t('settings', '⚙️', 'Настройки', 'Валюта, PIN, обновление')}
-    ${t('backupScr', '💾', 'Резервная копия', 'Сохранить / восстановить')}
-    ${t('help', '📲', 'Установка', 'Как поставить на телефон')}
-  </div>
-  <section class="card mt">
-    <div class="card-title">📚 Правила финансовой грамотности</div>
-    <div class="insight"><span class="e">1️⃣</span><div><b>Записывайте всё</b>, даже мелочи. Через месяц вы увидите, куда «утекают» деньги.</div></div>
-    <div class="insight"><span class="e">2️⃣</span><div><b>Сначала заплати себе:</b> в день ЗП сразу откладывайте 10% в цель «Подушка».</div></div>
-    <div class="insight"><span class="e">3️⃣</span><div><b>Подушка безопасности</b> — 3–6 месячных расходов. Пока её нет, не берите новых кредитов.</div></div>
-    <div class="insight"><span class="e">4️⃣</span><div><b>Платежи по долгам — не больше 30% дохода.</b> Смотрите ПДН во вкладке «Долги».</div></div>
-    <div class="insight"><span class="e">5️⃣</span><div><b>Закрывайте сначала дорогие долги</b> (микрозаймы, кредитки) — стратегия «Лавина».</div></div>
-    <div class="insight"><span class="e">6️⃣</span><div><b>Правило 50/30/20:</b> 50% — обязательное, 30% — желания, 20% — накопления и досрочное погашение.</div></div>
-    <div class="insight"><span class="e">7️⃣</span><div><b>Правило 24 часов:</b> для покупок вне плана подождите сутки — половина желаний пройдёт.</div></div>
-  </section>`;
+    ${t('plans', '💼', 'ЗП и платежи', 'Зарплата, аванс, счета')}
+    ${t('accounts', '💳', 'Мои счета', 'Карты и наличные')}
+    ${t('categories', '🏷', 'Категории', 'Добавить или изменить')}
+    ${t('budgets', '🎯', 'Лимиты', 'Бюджет на категории')}
+    ${t('goals', '🐷', 'Копилка', 'Цели и накопления')}
+    ${t('backupScr', '💾', 'Бэкап данных', 'Сохранить / перенести')}
+    ${t('settings', '⚙️', 'Настройки', 'Валюта, тема, PIN')}
+    ${t('help', '📲', 'Установка', 'Иконка на iPhone / Android')}
+  </div>`;
 }
 
 function viewPlans() {
@@ -441,22 +402,19 @@ function viewPlans() {
   const incT = sum(S.incomes.filter(x => x.active !== false), 'amount');
   const billT = sum(S.bills.filter(x => x.active !== false), 'amount');
   const debtT = sum(activeOweDebts(), 'payment');
-  let h = `<section class="card"><div class="card-title">🧮 Ежемесячный баланс по плану</div>
-    <div class="kv"><span>Доходы в месяц</span><b class="pos">+${money(incT)}</b></div>
+  let h = `<section class="card"><div class="card-title">🧮 Ежемесячный расклад</div>
+    <div class="kv"><span>Доходы (ЗП, аванс)</span><b class="pos">+${money(incT)}</b></div>
     <div class="kv"><span>Кредиты и долги</span><b>−${money(debtT)}</b></div>
-    <div class="kv"><span>Обязательные платежи</span><b>−${money(billT)}</b></div>
-    <div class="kv total"><span>Остаётся на жизнь и накопления</span><b class="${incT - debtT - billT < 0 ? 'neg' : 'pos'}">${money(incT - debtT - billT)}</b></div>
-    ${incT > 0 ? `<div class="muted small">≈ ${money((incT - debtT - billT) / 30)} в день</div>` : ''}
+    <div class="kv"><span>Обязательные счета</span><b>−${money(billT)}</b></div>
+    <div class="kv total"><span>Остаётся на жизнь</span><b class="${incT - debtT - billT < 0 ? 'neg' : 'pos'}">${money(incT - debtT - billT)}</b></div>
   </section>`;
-  h += `<section class="card"><div class="card-title">💼 Доходы (ЗП, аванс, подработка) <button class="link" data-act="editIncome">+ Добавить</button></div>
-    ${S.incomes.length ? `<div class="list">${S.incomes.map(x => `<div class="row" data-act="editIncome" data-id="${x.id}" style="${x.active === false ? 'opacity:.5' : ''}"><div class="ico">${cat(x.categoryId)?.icon || '💼'}</div><div class="grow"><div class="t">${esc(x.name)}</div><div class="s">каждое ${x.day}-е число · ${accName(x.accountId)}</div></div><div class="amt pos">+${money(x.amount)}</div></div>`).join('')}</div>` : emptyBox('💼', 'Добавьте зарплату и аванс отдельно — с днями выплат. Тогда приложение посчитает, сколько можно тратить до следующей ЗП.')}
+  h += `<section class="card"><div class="card-title">💼 Мои доходы (ЗП, аванс) <button class="link" data-act="editIncome">+ Добавить</button></div>
+    ${S.incomes.length ? `<div class="list">${S.incomes.map(x => `<div class="row" data-act="editIncome" data-id="${x.id}"><div class="ico">${cat(x.categoryId)?.icon || '💼'}</div><div class="grow"><div class="t">${esc(x.name)}</div><div class="s">каждое ${x.day}-е число</div></div><div class="amt pos">+${money(x.amount)}</div></div>`).join('')}</div>` : emptyBox('💼', 'Нажмите «+ Добавить», чтобы указать зарплату и аванс')}
   </section>`;
-  h += `<section class="card"><div class="card-title">🧾 Обязательные платежи <button class="link" data-act="editBill">+ Добавить</button></div>
-    ${S.bills.length ? `<div class="list">${S.bills.map(x => `<div class="row" data-act="editBill" data-id="${x.id}" style="${x.active === false ? 'opacity:.5' : ''}"><div class="ico">${cat(x.categoryId)?.icon || '🧾'}</div><div class="grow"><div class="t">${esc(x.name)}</div><div class="s">каждое ${x.day}-е число · ${esc(cat(x.categoryId)?.name || '')}</div></div><div class="amt">−${money(x.amount)}</div></div>`).join('')}</div>` : emptyBox('🧾', 'Аренда, коммуналка, связь, интернет, подписки, садик, страховка — всё, что платите каждый месяц.')}
-    <div class="muted small mt">Кредиты и долги добавляются во вкладке «Долги» и попадают в календарь автоматически.</div>
+  h += `<section class="card"><div class="card-title">🧾 Обязательные счета <button class="link" data-act="editBill">+ Добавить</button></div>
+    ${S.bills.length ? `<div class="list">${S.bills.map(x => `<div class="row" data-act="editBill" data-id="${x.id}"><div class="ico">${cat(x.categoryId)?.icon || '🧾'}</div><div class="grow"><div class="t">${esc(x.name)}</div><div class="s">каждое ${x.day}-е число</div></div><div class="amt">−${money(x.amount)}</div></div>`).join('')}</div>` : emptyBox('🧾', 'Квартплата, аренда, интернет, связь и т.д.')}
   </section>`;
-  h += `<section class="card"><div class="card-title">📅 Календарь: ${fmtMonthYear(now)}</div>
-    <div class="muted small" style="margin-bottom:6px">Кнопка <b>«Оплатить / Получил»</b> проводит операцию по счёту. Кнопка <b>«✓ Уже»</b> просто отмечает, что в этом месяце уже оплачено ранее (баланс счетов не меняется).</div>
+  h += `<section class="card"><div class="card-title">📅 Все платежи в ${MONTHS[now.getMonth()]}</div>
     ${items.length ? `<div class="list">${items.map(planRow).join('')}</div>` : emptyBox('📅', 'Пока пусто')}</section>`;
   return h;
 }
@@ -464,50 +422,36 @@ function viewPlans() {
 function viewBudgets() {
   const m = ym(new Date());
   const mTx = S.transactions.filter(t => t.type === 'expense' && t.date.slice(0, 7) === m);
-  const income = sum(S.incomes.filter(i => i.active !== false), 'amount');
-  const limits = Object.values(S.budgets).reduce((s, v) => s + (+v || 0), 0);
   const cats = S.categories.filter(c => c.type === 'expense');
-  let h = `<section class="card"><div class="card-title">🎯 Лимиты на ${fmtMonthYear(new Date())}</div>
-    <div class="muted small">Задайте, сколько готовы тратить в месяц на каждую категорию. Пустое поле — без лимита. Когда потрачено 80%+, на главной появится предупреждение.</div>
-    <div class="stats mt"><div class="stat"><span>Сумма лимитов</span><b>${money(limits)}</b></div><div class="stat"><span>Доход в месяц</span><b>${money(income)}</b></div></div>
-    ${income > 0 ? `<div class="muted small mt">По правилу 50/30/20: обязательное ≤ ${money(income * .5)}, желания ≤ ${money(income * .3)}, накопления ≥ ${money(income * .2)}.</div>` : ''}
-  </section><section class="card"><div class="list">`;
-  h += cats.map(c => {
-    const l = +S.budgets[c.id] || 0; const sp = sum(mTx.filter(t => t.categoryId === c.id), 'amount');
-    const p = l ? sp / l * 100 : 0;
-    return `<div class="row" style="flex-wrap:wrap"><div class="ico" style="background:${c.color}22">${c.icon}</div>
-      <div class="grow"><div class="t">${esc(c.name)}</div><div class="s">потрачено ${money(sp)}${l ? ` · ${l - sp >= 0 ? 'осталось ' + money(l - sp) : '<span class="neg">превышено на ' + money(sp - l) + '</span>'}` : ''}</div></div>
-      <input class="inp budget-inp" inputmode="decimal" data-budget="${c.id}" value="${l || ''}" placeholder="лимит">
-      ${l ? `<div style="flex-basis:100%"><div class="progress thin"><i style="width:${clamp(p, 0, 100)}%;background:${pctColor(p)}"></i></div></div>` : ''}
-    </div>`;
-  }).join('');
-  return h + '</div></section>';
+  return `<section class="card"><div class="card-title">🎯 Месячные лимиты</div>
+    <div class="muted small">Укажите лимит на месяц для категорий, которые хотите контролировать:</div>
+    <div class="list mt">${cats.map(c => {
+      const l = +S.budgets[c.id] || 0; const sp = sum(mTx.filter(t => t.categoryId === c.id), 'amount');
+      const p = l ? sp / l * 100 : 0;
+      return `<div class="row" style="flex-wrap:wrap"><div class="ico" style="background:${c.color}22">${c.icon}</div>
+        <div class="grow"><div class="t">${esc(c.name)}</div><div class="s">потрачено ${money(sp)}</div></div>
+        <input class="inp budget-inp" inputmode="decimal" data-budget="${c.id}" value="${l || ''}" placeholder="лимит">
+        ${l ? `<div style="flex-basis:100%"><div class="progress thin"><i style="width:${clamp(p, 0, 100)}%;background:${pctColor(p)}"></i></div></div>` : ''}
+      </div>`;
+    }).join('')}</div></section>`;
 }
 
 function viewGoals() {
-  if (!S.goals.length) return `<section class="card">${emptyBox('🐷', 'Цели помогают копить: подушка безопасности, отпуск, телефон, первый взнос…<br>Совет: первая цель — подушка на 3 месяца расходов.')}<button class="btn primary block" data-act="editGoal">+ Новая цель</button></section>`;
-  const now = new Date();
+  if (!S.goals.length) return `<section class="card">${emptyBox('🐷', 'Создайте цель для накоплений (например, «Подушка безопасности»).')}<button class="btn primary block" data-act="editGoal">+ Создать цель</button></section>`;
   return S.goals.map(g => {
     const p = g.target > 0 ? g.saved / g.target * 100 : 0;
-    let per = '';
-    if (g.deadline && g.saved < g.target) {
-      const d = parseISO(g.deadline); const months = Math.max(1, (d.getFullYear() - now.getFullYear()) * 12 + d.getMonth() - now.getMonth());
-      per = `Откладывайте ${money((g.target - g.saved) / months)} в месяц, чтобы успеть к ${fmtDate(g.deadline)}`;
-    }
-    return `<section class="card"><div class="head row" style="border:0;padding:0"><div class="ico">${g.icon || '🎯'}</div><div class="grow"><div class="t">${esc(g.name)}</div><div class="s">${money(g.saved)} из ${money(g.target)}</div></div><b>${Math.round(p)}%</b></div>
+    return `<section class="card"><div class="row" style="border:0;padding:0"><div class="ico">${g.icon || '🎯'}</div><div class="grow"><div class="t">${esc(g.name)}</div><div class="s">${money(g.saved)} из ${money(g.target)}</div></div><b>${Math.round(p)}%</b></div>
       ${progressBar(p, p >= 100 ? 'var(--pos)' : 'var(--accent)')}
-      <div class="muted small">${p >= 100 ? '🎉 Цель достигнута!' : per || 'Осталось ' + money(g.target - g.saved)}</div>
       <div class="btns"><button class="btn sm primary" data-act="goalAdd" data-id="${g.id}">+ Пополнить</button><button class="btn sm" data-act="goalAdd" data-id="${g.id}" data-minus="1">− Снять</button><button class="btn sm" data-act="editGoal" data-id="${g.id}">Изменить</button></div></section>`;
   }).join('');
 }
 
 function viewAccounts() {
   const b = balances();
-  return `<section class="card"><div class="card-title">Всего (учитываемые): ${money(totalBalance(b))}</div><div class="list">
-    ${S.accounts.map(a => `<div class="row" data-act="editAccount" data-id="${a.id}"><div class="ico">${a.icon}</div><div class="grow"><div class="t">${esc(a.name)}</div><div class="s">${a.inTotal === false ? 'не входит в «Всего денег» (копилка/депозит)' : 'входит в общий баланс · нажмите, чтобы изменить остаток'}</div></div><div class="amt ${b[a.id] < 0 ? 'neg' : ''}">${money(b[a.id])}</div></div>`).join('')}
+  return `<section class="card"><div class="card-title">Всего денег: ${money(totalBalance(b))}</div><div class="list">
+    ${S.accounts.map(a => `<div class="row" data-act="editAccount" data-id="${a.id}"><div class="ico">${a.icon}</div><div class="grow"><div class="t">${esc(a.name)}</div><div class="s">Нажмите, чтобы изменить баланс</div></div><div class="amt ${b[a.id] < 0 ? 'neg' : ''}">${money(b[a.id])}</div></div>`).join('')}
   </div></section>
-  <div class="btns"><button class="btn primary" data-act="editAccount">+ Новый счёт</button><button class="btn" data-act="transfer">🔁 Перевод между счетами</button></div>
-  <div class="muted small mt">Совет: нажмите на любой счёт, чтобы в любой момент быстро скорректировать текущий остаток денег.</div>`;
+  <div class="btns"><button class="btn primary" data-act="editAccount">+ Новый счёт</button><button class="btn" data-act="transfer">🔁 Перевод</button></div>`;
 }
 
 function viewCategories() {
@@ -521,58 +465,48 @@ function viewSettings() {
   const s = S.settings;
   return `<section class="card form">
     <label class="field"><span>Валюта</span><select data-set="currency">${CURRENCIES.map(([v, l]) => `<option value="${v}" ${s.currency === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-    <label class="field"><span>Тема</span><select data-set="theme"><option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Тёмная</option><option value="light" ${s.theme === 'light' ? 'selected' : ''}>Светлая</option></select></label>
-    <label class="field"><span>«Мелкая трата» — до какой суммы</span><input data-set="smallLimit" inputmode="decimal" value="${s.smallLimit}"><small>Для анализа мелких трат в отчётах</small></label>
+    <label class="field"><span>Тема оформления</span><select data-set="theme"><option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Тёмная</option><option value="light" ${s.theme === 'light' ? 'selected' : ''}>Светлая</option></select></label>
+    <label class="field"><span>Считать «мелочью» траты до:</span><input data-set="smallLimit" inputmode="decimal" value="${s.smallLimit}"></label>
   </section>
-  <section class="card"><div class="card-title">🔄 Обновление приложения (версия ${APP_VER})</div>
-    <div class="muted small">Если вы загрузили новые файлы на GitHub, нажмите кнопку ниже — приложение обновит программу, а все ваши записанные данные сохранятся.</div>
-    <div class="btns"><button class="btn primary" data-act="forceUpdate">🔄 Обновить программу (без потери данных)</button></div>
+  <section class="card"><div class="card-title">🔄 Обновление (версия 2.0)</div>
+    <div class="btns"><button class="btn primary" data-act="forceUpdate">🔄 Обновить программу (данные сохранятся)</button></div>
   </section>
-  <section class="card"><div class="card-title">🔒 PIN-код</div>
-    <div class="muted small">Защищает от посторонних глаз при открытии приложения.</div>
-    <div class="btns">${s.pin ? '<button class="btn" data-act="setPin">Сменить PIN</button><button class="btn danger" data-act="removePin">Убрать PIN</button>' : '<button class="btn primary" data-act="setPin">Установить PIN</button>'}</div>
+  <section class="card"><div class="card-title">🔒 Защита PIN-кодом</div>
+    <div class="btns">${s.pin ? '<button class="btn" data-act="setPin">Сменить PIN</button><button class="btn danger" data-act="removePin">Убрать PIN</button>' : '<button class="btn" data-act="setPin">Установить PIN-код</button>'}</div>
   </section>
-  <section class="card"><div class="card-title">🗂 Данные</div>
-    <div class="muted small">Операций: ${S.transactions.length} · Долгов: ${S.debts.length} · Размер: ${(JSON.stringify(S).length / 1024).toFixed(1)} КБ</div>
-    <div class="btns"><button class="btn" data-act="sub" data-sub="backupScr">💾 Резервная копия</button><button class="btn danger" data-act="reset">Удалить все данные</button></div>
-  </section>
-  <div class="muted small center">ФинКонтроль v${APP_VER} · данные хранятся только на вашем устройстве</div>`;
+  <section class="card"><div class="card-title">🗂 Управление данными</div>
+    <div class="btns"><button class="btn" data-act="sub" data-sub="backupScr">💾 Резервная копия</button><button class="btn danger" data-act="reset">Сбросить всё</button></div>
+  </section>`;
 }
 
 function viewBackup() {
   const lb = S.settings.lastBackup;
   return `<section class="card"><div class="card-title">💾 Резервная копия</div>
-    <div class="muted small">Все данные хранятся в памяти телефона (в браузере). Если очистить данные браузера или сменить телефон — они пропадут. Поэтому регулярно сохраняйте копию: отправьте файл себе в Telegram «Избранное», на Google Диск или почту.</div>
-    <div class="kv mt"><span>Последняя копия</span><b>${lb ? new Date(lb).toLocaleString('ru-RU') : 'не делалась'}</b></div>
-    <div class="btns"><button class="btn primary" data-act="backup">⬇️ Сохранить копию</button><button class="btn" data-act="importData">⬆️ Восстановить из файла</button></div>
-  </section>
-  <section class="card"><div class="card-title">📄 Все операции в Excel</div><div class="btns"><button class="btn" data-act="exportAll">Выгрузить CSV</button></div></section>
-  <section class="card"><div class="card-title">📱 Перенос на другой телефон</div><div class="muted small">1) Здесь: «Сохранить копию» → отправьте файл себе. 2) На новом телефоне откройте приложение → «Ещё → Резервная копия → Восстановить из файла».</div></section>`;
+    <div class="muted small">Сохраните файл копии в «Избранное» Telegram или в Файлы iPhone — тогда ваши данные никогда не потеряются даже при смене телефона.</div>
+    <div class="kv mt"><span>Последняя копия</span><b>${lb ? new Date(lb).toLocaleString('ru-RU') : 'ещё не делалась'}</b></div>
+    <div class="btns"><button class="btn primary" data-act="backup">⬇️ Сохранить копию</button><button class="btn" data-act="importData">⬆️ Загрузить из файла</button></div>
+  </section>`;
 }
 
 function viewHelp() {
-  return `<section class="card"><div class="card-title">🤖 Android (Chrome)</div>
-    <div class="insight"><span class="e">1</span><div>Откройте ссылку на приложение в Chrome</div></div>
-    <div class="insight"><span class="e">2</span><div>Меню ⋮ → <b>«Установить приложение»</b> или «Добавить на главный экран»</div></div>
-    <div class="insight"><span class="e">3</span><div>Иконка «ФинКонтроль» появится на рабочем столе. Работает без интернета.</div></div></section>
-  <section class="card"><div class="card-title">🍏 iPhone (Safari)</div>
-    <div class="insight"><span class="e">1</span><div>Откройте ссылку именно в <b>Safari</b></div></div>
-    <div class="insight"><span class="e">2</span><div>Кнопка «Поделиться» ⬆️ → <b>«На экран „Домой“»</b></div></div>
-    <div class="insight"><span class="e">3</span><div>Запускайте с иконки — откроется как обычное приложение.</div></div></section>
-  <div class="alert info">Данные привязаны к браузеру, в котором вы открыли приложение. Всегда открывайте его одним и тем же способом (с иконки) и делайте резервные копии.</div>`;
+  return `<section class="card"><div class="card-title">🍏 Как установить на iPhone</div>
+    <div class="insight"><span class="e">1</span><div>Откройте сайт в <b>Safari</b></div></div>
+    <div class="insight"><span class="e">2</span><div>Нажмите внизу кнопку <b>«Поделиться» ⬆️</b></div></div>
+    <div class="insight"><span class="e">3</span><div>Выберите <b>«На экран „Домой“»</b> → <b>«Добавить»</b></div></div>
+    <div class="insight"><span class="e">4</span><div>Открывайте приложение с появившейся иконки — оно будет работать во весь экран без рамок браузера!</div></div>
+  </section>`;
 }
 
-/* =================== RENDER =================== */
 const VIEWS = {
   home: { title: 'ФинКонтроль', render: viewHome },
   ops: { title: 'Операции', render: viewOps, after: afterOps },
   debts: { title: 'Долги и кредиты', render: viewDebts, actions: () => '<button class="btn sm primary" data-act="addDebt">+ Добавить</button>' },
   reports: { title: 'Отчёты', render: viewReports },
-  more: { title: 'Ещё', render: viewMore },
-  plans: { title: 'Доходы и платежи', render: viewPlans },
-  budgets: { title: 'Бюджеты', render: viewBudgets },
-  goals: { title: 'Цели', render: viewGoals, actions: () => S.goals.length ? '<button class="btn sm primary" data-act="editGoal">+ Цель</button>' : '' },
-  accounts: { title: 'Счета', render: viewAccounts },
+  more: { title: 'Меню', render: viewMore },
+  plans: { title: 'ЗП и платежи', render: viewPlans },
+  budgets: { title: 'Лимиты', render: viewBudgets },
+  goals: { title: 'Копилка', render: viewGoals, actions: () => S.goals.length ? '<button class="btn sm primary" data-act="editGoal">+ Цель</button>' : '' },
+  accounts: { title: 'Мои счета', render: viewAccounts },
   categories: { title: 'Категории', render: viewCategories },
   settings: { title: 'Настройки', render: viewSettings },
   backupScr: { title: 'Резервная копия', render: viewBackup },
@@ -582,7 +516,7 @@ const VIEWS = {
 function render() {
   document.documentElement.dataset.theme = S.settings.theme;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = S.settings.theme === 'light' ? '#f2f4f9' : '#0b1020';
+  if (meta) meta.content = S.settings.theme === 'light' ? '#f1f5f9' : '#0b1020';
   const V = VIEWS[nav.sub || nav.tab] || VIEWS.home;
   $('#title').textContent = V.title;
   $('#topActions').innerHTML = V.actions ? V.actions() : '';
