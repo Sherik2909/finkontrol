@@ -1,0 +1,20 @@
+{
+  "name": "ФинКонтроль — Долги, Кредиты, ЗП и Расходы",
+  "short_name": "ФинКонтроль",
+  "description": "Умный учёт долгов, кредитов, зарплаты, ежедневных трат и финансовой грамотности",
+  "lang": "ru",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
