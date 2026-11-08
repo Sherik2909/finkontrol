@@ -1,11 +1,11 @@
 'use strict';
 /* =========================================================
-   ФинКонтроль — ядро: данные, хранение, расчёты (v1.2 Pro).
+   ФинКонтроль — ядро: данные, хранение, расчёты (v2.5 Pro).
    Все данные хранятся локально на устройстве (localStorage).
    ========================================================= */
 
 const KEY = 'finkontrol_v1';
-const APP_VER = '1.2';
+const APP_VER = '2.5';
 const MONTHS = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
 const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const MONTHS_SHORT = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
@@ -30,7 +30,7 @@ const SYSTEM_CATS = ['c_debt', 'c_debtin', 'c_other', 'c_other_in'];
 function defaultState() {
   const c = (id, name, icon, color, type = 'expense') => ({ id, name, icon, color, type });
   return {
-    version: 2,
+    version: 3,
     settings: { currency: '₽', theme: 'dark', onboarded: false, pin: '', lastBackup: null, smallLimit: 500, lastAccount: '', startDismissed: false },
     accounts: [
       { id: 'a_card', name: 'Карта', icon: '💳', initial: 0, inTotal: true },
@@ -71,7 +71,7 @@ function defaultState() {
     bills: [],
     budgets: {},
     goals: [],
-    planMarks: {}, // { "debt:id|2026-11": true } — отметки «уже оплачено/получено в этом месяце» без списания со счёта
+    planMarks: {},
   };
 }
 
@@ -179,7 +179,12 @@ function totalBalance(b = balances()) { return r2(S.accounts.filter(a => a.inTot
 /* ---------- плановые отметки (выполнено в месяце) ---------- */
 function isPlanDone(key, ymStr) {
   if (S.planMarks && S.planMarks[key + '|' + ymStr]) return true;
-  return S.transactions.some(t => t.plan === key && t.date.slice(0, 7) === ymStr);
+  if (S.transactions.some(t => t.plan === key && t.date.slice(0, 7) === ymStr)) return true;
+  if (key.startsWith('debt:')) {
+    const dId = key.slice(5);
+    if (S.transactions.some(t => t.debtId === dId && t.date.slice(0, 7) === ymStr)) return true;
+  }
+  return false;
 }
 function setPlanMark(key, ymStr, val) {
   if (!S.planMarks) S.planMarks = {};
@@ -196,14 +201,6 @@ function debtPaidPrincipal(id) {
 }
 function debtRemaining(d) { return Math.max(0, r2((+d.base || 0) - debtPaidPrincipal(d.id))); }
 
-/**
- * Умный расчёт погашения долга:
- * - Режим 'fixed' (по графику: Остаток ÷ Платёж): проценты уже сидят в платеже или долг без %.
- *   Если осталось 7 платежей по 10 000 = 70 000 (или 70 200 с копейками), покажет ровно 7 месяцев, а не 8!
- * - Режим 'bank' (% начисляется на остаток основного долга каждый месяц):
- *   если в последнем месяце остаётся микро-хвостик от банковского округления (< 15% от платежа),
- *   он включается в последний платёж, а не раздувает срок на +1 лишний месяц.
- */
 function payoff(bal, ratePct, pay, calcMode = 'fixed') {
   if (bal <= 0) return { months: 0, interest: 0 };
   if (!(pay > 0)) return null;
@@ -252,7 +249,6 @@ function debtPayoffInfo(d) {
   const now = new Date();
   const curYM = ym(now);
   const doneThisMonth = isPlanDone('debt:' + d.id, curYM);
-  // Если платёж в этом месяце уже внесён — следующий из оставшихся p.months платежей будет в следующем месяце
   const startOffset = doneThisMonth ? 1 : 0;
   const last = addMonths(now, startOffset + p.months - 1);
   return Object.assign({}, p, {
@@ -263,9 +259,8 @@ function debtPayoffInfo(d) {
 
 const activeOweDebts = () => S.debts.filter(d => !d.closed && d.kind !== 'lent' && debtRemaining(d) > 0);
 
-/** Стратегии погашения: avalanche / snowball */
 function simulateAll(extra, strategy) {
-  const list = activeOweDebts().map(d => {
+  const list = activeOweDebts().filter(d => +d.payment > 0).map(d => {
     const useRate = d.calcMode === 'bank' ? (+d.rate || 0) : 0;
     return { id: d.id, name: d.name, bal: debtRemaining(d), r: useRate / 1200, pay: +d.payment || 0, rate: +d.rate || 0, closedAt: 0 };
   });
@@ -292,24 +287,74 @@ function simulateAll(extra, strategy) {
   return { months: month, interest: r2(interest), order };
 }
 
-/* ---------- plan (доходы / обязательные платежи / кредиты на месяц) ---------- */
+/* ---------- ПОЛНЫЙ план на месяц (все долги, кредиты, счета и доходы) ---------- */
 function planItems(monthDate) {
   const y = monthDate.getFullYear(), m = monthDate.getMonth(), D = dim(monthDate), ymS = ym(monthDate);
-  const mk = day => toISO(new Date(y, m, Math.min(+day || 1, D)));
+  const mk = day => toISO(new Date(y, m, clamp(+day || 1, 1, D)));
   const out = [];
-  S.incomes.filter(x => x.active !== false).forEach(x => out.push({ kind: 'income', key: 'inc:' + x.id, ref: x, name: x.name, icon: cat(x.categoryId)?.icon || '💼', amount: +x.amount || 0, date: mk(x.day), ym: ymS }));
-  S.bills.filter(x => x.active !== false).forEach(x => out.push({ kind: 'bill', key: 'bill:' + x.id, ref: x, name: x.name, icon: cat(x.categoryId)?.icon || '🧾', amount: +x.amount || 0, date: mk(x.day), ym: ymS }));
-  S.debts.filter(d => !d.closed && d.kind !== 'lent' && +d.payment > 0).forEach(d => {
-    const rem = debtRemaining(d), done = isPlanDone('debt:' + d.id, ymS);
+
+  // 1. Все активные доходы (ЗП, аванс и др.)
+  S.incomes.filter(x => x.active !== false).forEach(x => {
+    out.push({
+      kind: 'income',
+      key: 'inc:' + x.id,
+      id: x.id,
+      ref: x,
+      name: x.name,
+      icon: cat(x.categoryId)?.icon || '💼',
+      amount: +x.amount || 0,
+      date: mk(x.day),
+      ym: ymS,
+    });
+  });
+
+  // 2. Все обязательные счета (квартплата, связь, аренда и др.)
+  S.bills.filter(x => x.active !== false).forEach(x => {
+    out.push({
+      kind: 'bill',
+      key: 'bill:' + x.id,
+      id: x.id,
+      ref: x,
+      name: x.name,
+      icon: cat(x.categoryId)?.icon || '🧾',
+      amount: +x.amount || 0,
+      date: mk(x.day),
+      ym: ymS,
+    });
+  });
+
+  // 3. АБСОЛЮТНО ВСЕ активные долги и кредиты (даже если ежемесячный платёж не указан — тогда показывается остаток долга!)
+  S.debts.filter(d => !d.closed && d.kind !== 'lent').forEach(d => {
+    const rem = debtRemaining(d);
+    const done = isPlanDone('debt:' + d.id, ymS);
     if (rem <= 0 && !done) return;
     const useRate = d.calcMode === 'bank' ? (+d.rate || 0) : 0;
-    const due = rem > 0 ? Math.min(+d.payment, r2(rem * (1 + useRate / 1200))) : +d.payment;
-    out.push({ kind: 'debt', key: 'debt:' + d.id, ref: d, name: d.name, icon: (DEBT_KINDS[d.kind] || DEBT_KINDS.credit).i, amount: due, date: mk(d.payDay), ym: ymS });
+    const hasMonthly = (+d.payment || 0) > 0;
+    const due = hasMonthly
+      ? (rem > 0 ? Math.min(+d.payment, r2(rem * (1 + useRate / 1200))) : +d.payment)
+      : rem;
+    const po = hasMonthly ? debtPayoffInfo(d) : null;
+    out.push({
+      kind: 'debt',
+      key: 'debt:' + d.id,
+      id: d.id,
+      ref: d,
+      name: d.name,
+      icon: (DEBT_KINDS[d.kind] || DEBT_KINDS.credit).i,
+      amount: due,
+      rem,
+      monthsLeft: po && !po.never ? po.months : null,
+      noFixedPayment: !hasMonthly,
+      date: mk(d.payDay || 25),
+      ym: ymS,
+    });
   });
+
   out.forEach(i => {
     i.done = isPlanDone(i.key, ymS);
     i.markedOnly = !!(S.planMarks && S.planMarks[i.key + '|' + ymS]);
   });
+
   return out.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === 'income' ? -1 : 1));
 }
 
@@ -336,7 +381,34 @@ function forecast() {
   const daysLeft = dim(now) - now.getDate();
   const endMonth = r2(total + incMonth - oblMonth);
   const overdue = curUnpaid.filter(i => i.date < today && i.kind !== 'income');
+
+  // Считаем пошаговый остаток баланса для каждого события месяца (чтобы видеть кассовый разрыв)
+  let running = total;
+  for (const item of cur) {
+    if (!item.done) {
+      running = r2(running + (item.kind === 'income' ? item.amount : -item.amount));
+      item.balanceAfter = running;
+    }
+  }
+
   return { b, total, cur, all, oblMonth, incMonth, nextInc, horizon, oblBefore, before, days, free, daily, spentToday, avgDaily, daysLeft, endMonth, endMonthReal: r2(endMonth - avgDaily * daysLeft), overdue };
+}
+
+/** Топ-4 частые категории расходов для быстрого добавления в 1 клик */
+function topExpenseCategories() {
+  const counts = {};
+  for (const t of S.transactions) {
+    if (t.type === 'expense' && t.categoryId && t.categoryId !== 'c_debt') {
+      counts[t.categoryId] = (counts[t.categoryId] || 0) + 1;
+    }
+  }
+  const defaults = ['c_food', 'c_small', 'c_cafe', 'c_transport'];
+  defaults.forEach((id, idx) => { if (!(id in counts)) counts[id] = 0.5 - idx * 0.1; });
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => cat(id))
+    .filter(Boolean)
+    .slice(0, 4);
 }
 
 /* ---------- reports ---------- */

@@ -40,12 +40,12 @@ function paletteHTML(name, current) {
 }
 
 /* =================== 1. ОПЕРАЦИИ (ТРАТЫ / ДОХОДЫ / ПЕРЕВОДЫ) =================== */
-function openTxSheet(txId = null, presetType = 'expense') {
+function openTxSheet(txId = null, presetType = 'expense', presetCatId = null) {
   const existing = txId ? S.transactions.find(t => t.id === txId) : null;
   const t = existing ? Object.assign({}, existing) : {
     type: presetType,
     amount: '',
-    categoryId: presetType === 'income' ? 'c_salary' : 'c_food',
+    categoryId: presetCatId || (presetType === 'income' ? 'c_salary' : 'c_food'),
     accountId: S.settings.lastAccount || S.accounts[0]?.id || 'a_card',
     toAccountId: S.accounts[1]?.id || S.accounts[0]?.id || 'a_cash',
     date: todayStr(),
@@ -884,6 +884,8 @@ document.addEventListener('click', e => {
     case 'closeSheet': closeSheet(); break;
     case 'quickAdd': openTxSheet(null, 'expense'); break;
     case 'quickAddIncome': openTxSheet(null, 'income'); break;
+    case 'quickCat': openTxSheet(null, 'expense', actEl.dataset.cat); break;
+    case 'homeFilter': nav.homeFilter = actEl.dataset.v; render(); break;
     case 'editTx': openTxSheet(actEl.dataset.id); break;
     case 'transfer': openTxSheet(null, 'transfer'); break;
     case 'dismissStart': S.settings.startDismissed = true; save(); render(); break;

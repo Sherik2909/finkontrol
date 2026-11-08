@@ -1,4 +1,4 @@
-const CACHE = 'finkontrol-pwa-v3';
+const CACHE = 'finkontrol-pwa-v25';
 const ASSETS = [
   './',
   './index.html',
