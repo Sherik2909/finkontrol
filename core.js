@@ -1,10 +1,11 @@
 'use strict';
 /* =========================================================
-   ФинКонтроль — ядро: данные, хранение, расчёты.
+   ФинКонтроль — ядро: данные, хранение, расчёты (v1.2 Pro).
    Все данные хранятся локально на устройстве (localStorage).
    ========================================================= */
 
 const KEY = 'finkontrol_v1';
+const APP_VER = '1.2';
 const MONTHS = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
 const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const MONTHS_SHORT = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
@@ -29,7 +30,7 @@ const SYSTEM_CATS = ['c_debt', 'c_debtin', 'c_other', 'c_other_in'];
 function defaultState() {
   const c = (id, name, icon, color, type = 'expense') => ({ id, name, icon, color, type });
   return {
-    version: 1,
+    version: 2,
     settings: { currency: '₽', theme: 'dark', onboarded: false, pin: '', lastBackup: null, smallLimit: 500, lastAccount: '', startDismissed: false },
     accounts: [
       { id: 'a_card', name: 'Карта', icon: '💳', initial: 0, inTotal: true },
@@ -64,12 +65,13 @@ function defaultState() {
       c('c_gift_in', 'Подарки, помощь', '🎁', '#f59e0b', 'income'),
       c('c_other_in', 'Прочие доходы', '➕', '#94a3b8', 'income'),
     ],
-    transactions: [],  // {id,type:'expense'|'income'|'transfer',amount,categoryId,accountId,toAccountId,date,note,debtId?,principal?,plan?,createdAt}
-    debts: [],         // {id,name,kind,total,base,rate,payment,payDay,endDate,note,closed}
-    incomes: [],       // {id,name,amount,day,accountId,categoryId,active}
-    bills: [],         // {id,name,amount,day,categoryId,accountId,active}
-    budgets: {},       // categoryId -> monthly limit
-    goals: [],         // {id,name,icon,target,saved,deadline}
+    transactions: [],
+    debts: [],
+    incomes: [],
+    bills: [],
+    budgets: {},
+    goals: [],
+    planMarks: {}, // { "debt:id|2026-11": true } — отметки «уже оплачено/получено в этом месяце» без списания со счёта
   };
 }
 
@@ -77,6 +79,7 @@ function migrate(s) {
   const d = defaultState();
   for (const k of Object.keys(d)) if (s[k] === undefined) s[k] = d[k];
   s.settings = Object.assign({}, d.settings, s.settings);
+  if (!s.planMarks || typeof s.planMarks !== 'object') s.planMarks = {};
   return s;
 }
 function load() {
@@ -91,7 +94,6 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { alert('Не удалось сохранить данные: ' + e.message); }
 }
-// Запрашиваем у браузера телефона защиту хранилища от автоочистки
 if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().catch(() => {});
 }
@@ -106,7 +108,6 @@ const sum = (arr, key) => arr.reduce((s, x) => s + (key ? (+x[key] || 0) : (+x |
 const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const num = v => { const x = parseFloat(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return isFinite(x) ? x : 0; };
-/** Сумма с поддержкой простых выражений: «150+80», «3*45» */
 function calc(v) {
   const s = String(v ?? '').replace(/\s/g, '').replace(/,/g, '.');
   if (!s) return 0;
@@ -175,6 +176,18 @@ function balances() {
 }
 function totalBalance(b = balances()) { return r2(S.accounts.filter(a => a.inTotal !== false).reduce((s, a) => s + (b[a.id] || 0), 0)); }
 
+/* ---------- плановые отметки (выполнено в месяце) ---------- */
+function isPlanDone(key, ymStr) {
+  if (S.planMarks && S.planMarks[key + '|' + ymStr]) return true;
+  return S.transactions.some(t => t.plan === key && t.date.slice(0, 7) === ymStr);
+}
+function setPlanMark(key, ymStr, val) {
+  if (!S.planMarks) S.planMarks = {};
+  const k = key + '|' + ymStr;
+  if (val) S.planMarks[k] = true;
+  else delete S.planMarks[k];
+}
+
 /* ---------- debts ---------- */
 function debtPaidPrincipal(id) {
   let p = 0;
@@ -182,59 +195,98 @@ function debtPaidPrincipal(id) {
   return p;
 }
 function debtRemaining(d) { return Math.max(0, r2((+d.base || 0) - debtPaidPrincipal(d.id))); }
-/** Симуляция погашения одного долга аннуитетом */
-function payoff(bal, ratePct, pay) {
-  const r = (+ratePct || 0) / 1200;
+
+/**
+ * Умный расчёт погашения долга:
+ * - Режим 'fixed' (по графику: Остаток ÷ Платёж): проценты уже сидят в платеже или долг без %.
+ *   Если осталось 7 платежей по 10 000 = 70 000 (или 70 200 с копейками), покажет ровно 7 месяцев, а не 8!
+ * - Режим 'bank' (% начисляется на остаток основного долга каждый месяц):
+ *   если в последнем месяце остаётся микро-хвостик от банковского округления (< 15% от платежа),
+ *   он включается в последний платёж, а не раздувает срок на +1 лишний месяц.
+ */
+function payoff(bal, ratePct, pay, calcMode = 'fixed') {
   if (bal <= 0) return { months: 0, interest: 0 };
   if (!(pay > 0)) return null;
-  let m = 0, int = 0;
-  while (bal > 0.005 && m < 600) {
-    const i = bal * r;
-    if (r > 0 && pay <= i) return { never: true };
-    int += i; bal = bal + i - pay; m++;
+
+  const useBankRate = calcMode === 'bank' && (+ratePct || 0) > 0;
+  const r = useBankRate ? (+ratePct || 0) / 1200 : 0;
+
+  if (r === 0) {
+    const exact = bal / pay;
+    const whole = Math.floor(exact);
+    const tail = exact - whole;
+    const months = whole === 0 ? 1 : (tail <= 0.15 ? whole : whole + 1);
+    return { months, interest: 0 };
+  }
+
+  let m = 0, int = 0, cur = bal;
+  const tailThreshold = pay * 0.15;
+  while (cur > 0.01 && m < 600) {
+    const i = cur * r;
+    if (pay <= i) return { never: true };
+    int += i;
+    cur = cur + i - pay;
+    m++;
+    if (cur > 0 && cur <= tailThreshold) {
+      cur = 0;
+      break;
+    }
   }
   if (m >= 600) return { never: true };
   return { months: m, interest: r2(int) };
 }
+
 function annuity(B, ratePct, n) {
   const r = (+ratePct || 0) / 1200;
   if (n <= 0) return 0;
   if (!r) return B / n;
   return B * r / (1 - Math.pow(1 + r, -n));
 }
-function isPlanDone(key, ymStr) { return S.transactions.some(t => t.plan === key && t.date.slice(0, 7) === ymStr); }
+
 function debtPayoffInfo(d) {
   const rem = debtRemaining(d);
   if (rem <= 0) return { months: 0, interest: 0, closedNow: true };
-  const p = payoff(rem, d.rate, +d.payment || 0);
+  const p = payoff(rem, d.rate, +d.payment || 0, d.calcMode || 'fixed');
   if (!p || p.never) return p;
+
   const now = new Date();
-  const start = isPlanDone('debt:' + d.id, ym(now)) ? 1 : 0;
-  const last = addMonths(now, start + p.months - 1);
-  return Object.assign({}, p, { date: new Date(last.getFullYear(), last.getMonth(), Math.min(+d.payDay || 1, dim(last))) });
+  const curYM = ym(now);
+  const doneThisMonth = isPlanDone('debt:' + d.id, curYM);
+  // Если платёж в этом месяце уже внесён — следующий из оставшихся p.months платежей будет в следующем месяце
+  const startOffset = doneThisMonth ? 1 : 0;
+  const last = addMonths(now, startOffset + p.months - 1);
+  return Object.assign({}, p, {
+    doneThisMonth,
+    date: new Date(last.getFullYear(), last.getMonth(), Math.min(+d.payDay || 1, dim(last))),
+  });
 }
+
 const activeOweDebts = () => S.debts.filter(d => !d.closed && d.kind !== 'lent' && debtRemaining(d) > 0);
 
-/** Стратегии погашения: avalanche (сначала высокая ставка) / snowball (сначала маленький остаток) */
+/** Стратегии погашения: avalanche / snowball */
 function simulateAll(extra, strategy) {
-  const list = activeOweDebts().map(d => ({ id: d.id, name: d.name, bal: debtRemaining(d), r: (+d.rate || 0) / 1200, pay: +d.payment || 0, rate: +d.rate || 0, closedAt: 0 }));
+  const list = activeOweDebts().map(d => {
+    const useRate = d.calcMode === 'bank' ? (+d.rate || 0) : 0;
+    return { id: d.id, name: d.name, bal: debtRemaining(d), r: useRate / 1200, pay: +d.payment || 0, rate: +d.rate || 0, closedAt: 0 };
+  });
   if (!list.length) return { months: 0, interest: 0, order: [] };
   let month = 0, interest = 0; const order = [];
-  while (list.some(x => x.bal > 0.005) && month < 600) {
+  while (list.some(x => x.bal > 0.01) && month < 600) {
     month++;
     let pool = extra;
     for (const x of list) {
-      if (x.bal <= 0.005) { pool += x.pay; continue; } // освободившиеся платежи идут в «снежный ком»
+      if (x.bal <= 0.01) { pool += x.pay; continue; }
       const i = x.bal * x.r; x.bal += i; interest += i;
       const p = Math.min(x.pay, x.bal); x.bal -= p; pool += x.pay - p;
+      if (x.bal > 0 && x.bal <= x.pay * 0.15) x.bal = 0;
     }
-    const active = list.filter(x => x.bal > 0.005);
+    const active = list.filter(x => x.bal > 0.01);
     active.sort(strategy === 'avalanche' ? (a, b) => b.rate - a.rate || a.bal - b.bal : (a, b) => a.bal - b.bal || b.rate - a.rate);
     for (const x of active) {
       if (pool <= 0) break;
       const p = Math.min(pool, x.bal); x.bal -= p; pool -= p;
     }
-    for (const x of list) if (x.bal <= 0.005 && !x.closedAt) { x.closedAt = month; order.push(x); }
+    for (const x of list) if (x.bal <= 0.01 && !x.closedAt) { x.closedAt = month; order.push(x); }
   }
   if (month >= 600) return { never: true };
   return { months: month, interest: r2(interest), order };
@@ -245,15 +297,19 @@ function planItems(monthDate) {
   const y = monthDate.getFullYear(), m = monthDate.getMonth(), D = dim(monthDate), ymS = ym(monthDate);
   const mk = day => toISO(new Date(y, m, Math.min(+day || 1, D)));
   const out = [];
-  S.incomes.filter(x => x.active !== false).forEach(x => out.push({ kind: 'income', key: 'inc:' + x.id, ref: x, name: x.name, icon: cat(x.categoryId)?.icon || '💼', amount: +x.amount || 0, date: mk(x.day) }));
-  S.bills.filter(x => x.active !== false).forEach(x => out.push({ kind: 'bill', key: 'bill:' + x.id, ref: x, name: x.name, icon: cat(x.categoryId)?.icon || '🧾', amount: +x.amount || 0, date: mk(x.day) }));
+  S.incomes.filter(x => x.active !== false).forEach(x => out.push({ kind: 'income', key: 'inc:' + x.id, ref: x, name: x.name, icon: cat(x.categoryId)?.icon || '💼', amount: +x.amount || 0, date: mk(x.day), ym: ymS }));
+  S.bills.filter(x => x.active !== false).forEach(x => out.push({ kind: 'bill', key: 'bill:' + x.id, ref: x, name: x.name, icon: cat(x.categoryId)?.icon || '🧾', amount: +x.amount || 0, date: mk(x.day), ym: ymS }));
   S.debts.filter(d => !d.closed && d.kind !== 'lent' && +d.payment > 0).forEach(d => {
     const rem = debtRemaining(d), done = isPlanDone('debt:' + d.id, ymS);
     if (rem <= 0 && !done) return;
-    const due = rem > 0 ? Math.min(+d.payment, r2(rem * (1 + (+d.rate || 0) / 1200))) : +d.payment;
-    out.push({ kind: 'debt', key: 'debt:' + d.id, ref: d, name: d.name, icon: (DEBT_KINDS[d.kind] || DEBT_KINDS.credit).i, amount: due, date: mk(d.payDay) });
+    const useRate = d.calcMode === 'bank' ? (+d.rate || 0) : 0;
+    const due = rem > 0 ? Math.min(+d.payment, r2(rem * (1 + useRate / 1200))) : +d.payment;
+    out.push({ kind: 'debt', key: 'debt:' + d.id, ref: d, name: d.name, icon: (DEBT_KINDS[d.kind] || DEBT_KINDS.credit).i, amount: due, date: mk(d.payDay), ym: ymS });
   });
-  out.forEach(i => i.done = isPlanDone(i.key, ymS));
+  out.forEach(i => {
+    i.done = isPlanDone(i.key, ymS);
+    i.markedOnly = !!(S.planMarks && S.planMarks[i.key + '|' + ymS]);
+  });
   return out.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === 'income' ? -1 : 1));
 }
 
@@ -297,7 +353,6 @@ function periodRange(rp, rFrom, rTo) {
 function prevRange(from, to) {
   const len = diffDays(from, to) + 1;
   const f = parseISO(from);
-  // если это ровно календарный месяц(ы) — берём предыдущие календарные месяцы
   if (f.getDate() === 1) {
     const t = parseISO(to);
     if (t.getDate() === dim(t)) {

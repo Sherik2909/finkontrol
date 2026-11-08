@@ -1,6 +1,6 @@
 'use strict';
 /* =========================================================
-   ФинКонтроль — экраны (views) и рендер
+   ФинКонтроль — экраны (views) и рендер (v1.2 Pro)
    ========================================================= */
 
 const nav = {
@@ -10,7 +10,6 @@ const nav = {
   extra: 0, showClosed: false, catTab: 'expense',
 };
 
-/* ---------- small html helpers ---------- */
 const emptyBox = (e, text) => `<div class="empty"><span class="e">${e}</span>${text}</div>`;
 function progressBar(pct, color) { return `<div class="progress"><i style="width:${clamp(pct, 0, 100)}%;background:${color || 'var(--accent)'}"></i></div>`; }
 const pctColor = p => p >= 100 ? 'var(--neg)' : p >= 80 ? 'var(--warn)' : 'var(--pos)';
@@ -24,7 +23,12 @@ function planRow(i) {
     <div class="ico">${i.icon}</div>
     <div class="grow"><div class="t">${esc(i.name)}</div><div class="s">${fmtDate(i.date)} · ${kindN}${over ? ' · просрочено!' : ''}</div></div>
     <div class="amt ${isInc ? 'pos' : ''}">${isInc ? '+' : '−'}${money(i.amount)}</div>
-    ${i.done ? '<span class="badge ok">✓</span>' : `<button class="btn sm ${over ? 'danger' : ''}" data-act="planDo" data-key="${i.key}" data-date="${i.date}">${isInc ? 'Получил' : 'Оплатил'}</button>`}
+    ${i.done
+      ? `<button class="btn sm" data-act="unmarkPlan" data-key="${i.key}" data-ym="${i.ym || i.date.slice(0, 7)}" title="Нажмите, если нужно отменить отметку">✓ ${isInc ? 'Получен' : 'Оплачен'}</button>`
+      : `<div style="display:flex;gap:4px">
+          <button class="btn sm ${over ? 'danger' : 'primary'}" data-act="planDo" data-key="${i.key}" data-date="${i.date}">${isInc ? 'Получил' : 'Оплатить'}</button>
+          <button class="btn sm" data-act="markPlanSilent" data-key="${i.key}" data-ym="${i.ym || i.date.slice(0, 7)}" title="Отметить как уже оплаченный/полученный ранее (без изменения баланса счёта)">✓ Уже</button>
+        </div>`}
   </div>`;
 }
 
@@ -45,6 +49,7 @@ function txRow(t) {
 
 /* =================== ГЛАВНАЯ =================== */
 function startCard() {
+  if (S.settings.startDismissed) return '';
   const steps = [
     [S.incomes.length > 0, 'Добавьте зарплату и аванс (суммы и дни выплат)', 'plans'],
     [S.debts.length > 0, 'Внесите кредиты, рассрочки, кредитки и долги', 'debts'],
@@ -60,13 +65,12 @@ function startCard() {
 }
 
 function viewHome() {
-  const f = forecast(); const now = new Date(); const today = todayStr();
+  const f = forecast(); const now = new Date();
   const mTx = S.transactions.filter(t => t.date.slice(0, 7) === ym(now));
   const inc = sum(mTx.filter(t => t.type === 'income'), 'amount');
   const exp = sum(mTx.filter(t => t.type === 'expense'), 'amount');
   let h = '';
 
-  // напоминание о резервной копии
   const lb = S.settings.lastBackup;
   if (S.transactions.length >= 15 && (!lb || Date.now() - lb > 7 * 864e5)) {
     h += `<div class="alert wn">💾 ${lb ? 'Резервная копия делалась ' + Math.floor((Date.now() - lb) / 864e5) + ' дн. назад.' : 'Вы ещё не делали резервную копию.'} Данные хранятся только на этом телефоне — сохраните копию (в Telegram, Google Диск, почту).
@@ -75,16 +79,15 @@ function viewHome() {
   h += startCard();
 
   h += `<section class="card hero">
-    <div class="muted">Всего денег сейчас</div>
+    <div class="row-between" style="align-items:center"><span class="muted">Всего денег сейчас</span><button class="link" style="color:#fff;font-size:12.5px;opacity:.9" data-act="sub" data-sub="accounts">Изменить баланс ›</button></div>
     <div class="big ${f.total < 0 ? 'neg' : ''}">${money(f.total)}</div>
-    <div class="acc-chips">${S.accounts.map(a => `<div class="acc-chip" data-act="sub" data-sub="accounts"><span>${a.icon} ${esc(a.name)}${a.inTotal === false ? ' 🔒' : ''}</span><b>${money(f.b[a.id])}</b></div>`).join('')}</div>
+    <div class="acc-chips">${S.accounts.map(a => `<div class="acc-chip" data-act="editAccount" data-id="${a.id}"><span>${a.icon} ${esc(a.name)}${a.inTotal === false ? ' 🔒' : ''}</span><b>${money(f.b[a.id])}</b></div>`).join('')}</div>
   </section>`;
 
   if (f.overdue.length) {
-    h += `<div class="alert">⚠️ <b>Просрочено ${f.overdue.length} ${plural(f.overdue.length, ['платёж', 'платежа', 'платежей'])}</b> на ${money(sum(f.overdue, 'amount'))}. Оплатите как можно скорее, чтобы не было штрафов и пеней.</div>`;
+    h += `<div class="alert">⚠️ <b>Не отмечено ${f.overdue.length} ${plural(f.overdue.length, ['платёж', 'платежа', 'платежей'])}</b> на ${money(sum(f.overdue, 'amount'))}. Если вы уже оплатили их раньше — нажмите кнопку <b>«✓ Уже»</b> в списке ниже.</div>`;
   }
 
-  // дневной лимит
   const pct = f.daily > 0 ? f.spentToday / f.daily * 100 : (f.spentToday > 0 ? 100 : 0);
   const leftToday = r2(f.daily - f.spentToday);
   h += `<section class="card">
@@ -94,13 +97,12 @@ function viewHome() {
     ${progressBar(pct, pctColor(pct))}
     <div class="row-between small"><span>Сегодня потрачено: <b>${money(f.spentToday)}</b></span>
       <span class="${leftToday < 0 ? 'neg' : 'muted'}">${f.daily > 0 ? (leftToday >= 0 ? 'осталось ' + money(leftToday) : 'перерасход ' + money(-leftToday)) : ''}</span></div>
-    ${f.daily < 0 ? `<div class="alert mt">Денег не хватает на обязательные платежи до следующего дохода: не хватает <b>${money(-f.free)}</b>. Сократите траты или договоритесь о переносе платежа.</div>` : ''}
+    ${f.daily < 0 ? `<div class="alert mt">Денег не хватает на неоплаченные обязательные платежи до следующего дохода: не хватает <b>${money(-f.free)}</b>. (Если какой-то кредит за этот месяц уже оплачен — отметьте его кнопкой «✓ Уже»).</div>` : ''}
     <div class="divider"></div>
-    <div class="kv"><span>Нужно оплатить до ${f.nextInc ? 'ЗП' : 'конца месяца'}</span><b>${money(f.oblBefore)}</b></div>
+    <div class="kv"><span>Ещё оплатить до ${f.nextInc ? 'ЗП' : 'конца месяца'}</span><b>${money(f.oblBefore)}</b></div>
     <div class="kv total"><span>Останется после всех платежей</span><b class="${f.free < 0 ? 'neg' : 'pos'}">${money(f.free)}</b></div>
   </section>`;
 
-  // прогноз месяца
   h += `<section class="card">
     <div class="card-title">📅 ${cap(MONTHS[now.getMonth()])}: прогноз на конец месяца</div>
     <div class="kv"><span>Деньги сейчас</span><b>${money(f.total)}</b></div>
@@ -114,14 +116,12 @@ function viewHome() {
     </div>
   </section>`;
 
-  // ближайшие платежи
   const lim = toISO(addDays(now, 14));
   const upcoming = f.all.filter(i => i.date <= lim);
   h += `<section class="card"><div class="card-title">🗓 Ближайшие 14 дней <button class="link" data-act="sub" data-sub="plans">Все</button></div>
-    ${upcoming.length ? `<div class="list">${upcoming.map(planRow).join('')}</div>` : emptyBox('😌', S.incomes.length + S.bills.length + S.debts.length ? 'Нет платежей в ближайшие 2 недели' : 'Добавьте доходы, кредиты и обязательные платежи — здесь появится календарь')}
+    ${upcoming.length ? `<div class="list">${upcoming.map(planRow).join('')}</div>` : emptyBox('😌', S.incomes.length + S.bills.length + S.debts.length ? 'Все ближайшие платежи оплачены!' : 'Добавьте доходы, кредиты и обязательные платежи — здесь появится календарь')}
   </section>`;
 
-  // топ категорий + бюджеты
   const cats = byCategory(mTx.filter(t => t.type === 'expense'));
   const warn = Object.entries(S.budgets).filter(([, l]) => +l > 0).map(([id, l]) => {
     const sp = sum(mTx.filter(t => t.type === 'expense' && t.categoryId === id), 'amount');
@@ -138,7 +138,6 @@ function viewHome() {
     </section>`;
   }
 
-  // долги
   const owe = activeOweDebts();
   if (owe.length) {
     const totalOwe = sum(owe.map(debtRemaining));
@@ -196,28 +195,33 @@ function debtCard(d) {
   const k = DEBT_KINDS[d.kind] || DEBT_KINDS.credit;
   const lent = d.kind === 'lent';
   const po = +d.payment > 0 ? debtPayoffInfo(d) : null;
-  const monthDone = isPlanDone('debt:' + d.id, ym(new Date()));
+  const curYM = ym(new Date());
+  const monthDone = isPlanDone('debt:' + d.id, curYM);
   let closeTxt;
   if (rem <= 0) closeTxt = '<span class="pos">Полностью закрыт 🎉</span>';
   else if (!po) closeTxt = '<span class="muted">Без графика — укажите платёж в месяц, чтобы увидеть дату закрытия</span>';
-  else if (po.never) closeTxt = '<span class="neg">⚠️ Платёж меньше начисляемых процентов — долг не уменьшается! Нужно платить больше.</span>';
-  else closeTxt = `${lent ? 'Вернут' : 'Закроется'} через <b>${po.months} ${plural(po.months, MONTH_FORMS)}</b> — <b>${fmtMonthYear(po.date)}</b>${po.interest > 0 ? `<br><span class="muted">Ещё переплата процентами: ${money(po.interest)}</span>` : ''}`;
+  else if (po.never) closeTxt = '<span class="neg">⚠️ Платёж меньше начисляемых процентов — долг не уменьшается!</span>';
+  else closeTxt = `Осталось платежей: <b>${po.months} (${po.months} ${plural(po.months, MONTH_FORMS)})</b> · закроется в <b>${fmtMonthYear(po.date)}</b>${po.interest > 0 ? `<br><span class="muted">Проценты сверху: ${money(po.interest)}</span>` : ''}`;
+
   return `<section class="card debt">
     <div class="head"><div class="ico">${k.i}</div>
       <div class="grow" style="min-width:0"><div style="font-weight:650">${esc(d.name)}</div><div class="muted small">${k.n}${d.note ? ' · ' + esc(d.note) : ''}</div></div>
-      ${!lent && +d.payment > 0 && rem > 0 ? (monthDone ? '<span class="badge ok">оплачен в этом мес.</span>' : '<span class="badge wn">не оплачен</span>') : ''}
+      ${!lent && +d.payment > 0 && rem > 0 ? (monthDone
+        ? `<button class="badge ok" style="border:0;cursor:pointer" data-act="unmarkPlan" data-key="debt:${d.id}" data-ym="${curYM}" title="Нажмите, чтобы снять отметку оплаты за этот месяц">✓ оплачен в ${MONTHS_SHORT[new Date().getMonth()]}</button>`
+        : `<span class="badge wn">ждёт оплаты</span>`) : ''}
     </div>
     <div class="row-between" style="margin-top:12px;align-items:baseline"><div><div class="muted small">${lent ? 'Вам должны' : 'Осталось выплатить'}</div><div class="rem ${lent ? 'pos' : ''}">${money(rem)}</div></div>
       <div class="muted small" style="text-align:right">из ${money(total)}<br>${lent ? 'возвращено' : 'выплачено'} ${Math.round(paidPct)}%</div></div>
     ${progressBar(paidPct, 'var(--pos)')}
     <div class="meta">
       <div>Платёж/мес<b>${+d.payment ? money(d.payment) : '—'}</b></div>
-      <div>День<b>${d.payDay ? d.payDay + '-е число' : '—'}</b></div>
-      <div>Ставка<b>${+d.rate ? d.rate + '%' : '0%'}</b></div>
+      <div>Число<b>${d.payDay ? d.payDay + '-е' : '—'}</b></div>
+      <div>Расчёт<b>${d.calcMode === 'bank' && +d.rate > 0 ? d.rate + '% годовых' : 'по графику'}</b></div>
     </div>
     <div class="close-txt">${closeTxt}</div>
     <div class="btns">
-      ${rem > 0 ? `<button class="btn sm primary" data-act="payDebt" data-id="${d.id}">${lent ? '💰 Мне вернули' : '💳 Внести платёж'}</button>` : ''}
+      ${rem > 0 ? `<button class="btn sm primary" data-act="payDebt" data-id="${d.id}">${lent ? '💰 Мне вернули' : '💳 Оплатить со счёта'}</button>` : ''}
+      ${!lent && +d.payment > 0 && rem > 0 && !monthDone ? `<button class="btn sm" data-act="markPlanSilent" data-key="debt:${d.id}" data-ym="${curYM}" title="Если за этот месяц вы уже заплатили ранее и остаток уже указан с учётом этой оплаты">✓ Уже оплачен в ${MONTHS_SHORT[new Date().getMonth()]}</button>` : ''}
       <button class="btn sm" data-act="debtHistory" data-id="${d.id}">История</button>
       <button class="btn sm" data-act="editDebt" data-id="${d.id}">Изменить</button>
     </div>
@@ -229,37 +233,38 @@ function viewDebts() {
   const lent = S.debts.filter(d => !d.closed && d.kind === 'lent');
   const closed = S.debts.filter(d => d.closed);
   if (!S.debts.length) {
-    return `<section class="card">${emptyBox('🏦', 'Здесь будут все ваши кредиты, ипотека, рассрочки, кредитки, микрозаймы, долги людям — и кто должен вам.<br><br>Приложение посчитает, когда закроется каждый долг, сколько переплата, и подскажет, как закрыть быстрее.')}
+    return `<section class="card">${emptyBox('🏦', 'Здесь будут все ваши кредиты, ипотека, рассрочки, кредитки, микрозаймы, долги людям — и кто должен вам.<br><br>Приложение точно посчитает, сколько месяцев осталось, когда закроется каждый долг и сколько останется денег после оплаты.')}
       <button class="btn primary block" data-act="addDebt">+ Добавить долг или кредит</button></section>`;
   }
   const act = owe.filter(d => debtRemaining(d) > 0);
   const totalOwe = sum(act.map(debtRemaining));
   const monthly = sum(act, 'payment');
+  const curYM = ym(new Date());
+  const unpaidThisMonth = sum(act.filter(d => !isPlanDone('debt:' + d.id, curYM)), 'payment');
   const income = sum(S.incomes.filter(i => i.active !== false), 'amount');
   const pdn = income > 0 ? monthly / income * 100 : null;
   const infos = act.map(d => +d.payment > 0 ? debtPayoffInfo(d) : null);
   const anyNever = infos.some(p => p && p.never);
   const noSched = infos.some(p => !p);
   const freedom = infos.filter(p => p && p.date).reduce((m, p) => !m || p.date > m ? p.date : m, null);
-  const interestAhead = sum(infos.filter(p => p && !p.never), 'interest');
   let h = '';
   if (act.length) {
     let pdnTxt = '', pdnCls = '';
     if (pdn != null) {
       if (pdn < 30) { pdnCls = 'pos'; pdnTxt = 'Нормальная нагрузка'; }
       else if (pdn < 50) { pdnCls = 'warn'; pdnTxt = 'Высокая — новые кредиты не берите'; }
-      else { pdnCls = 'neg'; pdnTxt = 'Критическая! Больше половины дохода уходит на долги'; }
+      else { pdnCls = 'neg'; pdnTxt = 'Критическая! >50% дохода уходит на долги'; }
     }
     h += `<section class="card">
       <div class="card-title">📌 Сводка по долгам</div>
       <div class="stats">
-        <div class="stat"><span>Всего должен</span><b class="neg">${money(totalOwe)}</b></div>
-        <div class="stat"><span>Платежи в месяц</span><b>${money(monthly)}</b></div>
-        <div class="stat"><span>Свобода от долгов</span><b>${anyNever ? '∞' : freedom ? cap(fmtMonthYear(freedom)) : '—'}</b></div>
-        <div class="stat"><span>Переплата впереди</span><b>${money(interestAhead)}</b></div>
+        <div class="stat"><span>Всего осталось</span><b class="neg">${money(totalOwe)}</b></div>
+        <div class="stat"><span>Платежи по графику</span><b>${money(monthly)}/мес</b></div>
+        <div class="stat"><span>Осталось в этом мес.</span><b class="${unpaidThisMonth > 0 ? 'warn' : 'pos'}">${unpaidThisMonth > 0 ? money(unpaidThisMonth) : 'Всё оплачено ✓'}</b></div>
+        <div class="stat"><span>Полное закрытие</span><b>${anyNever ? '∞' : freedom ? cap(fmtMonthYear(freedom)) : '—'}</b></div>
       </div>
       ${pdn != null ? `<div class="mt"><div class="row-between small"><span>Долговая нагрузка (ПДН): <b class="${pdnCls}">${Math.round(pdn)}%</b> дохода</span><span class="${pdnCls}">${pdnTxt}</span></div>${progressBar(pdn, pdnCls === 'pos' ? 'var(--pos)' : pdnCls === 'warn' ? 'var(--warn)' : 'var(--neg)')}</div>` : '<div class="muted small mt">Добавьте доходы в «Ещё → Доходы и платежи», чтобы увидеть долговую нагрузку.</div>'}
-      ${noSched ? '<div class="muted small">У некоторых долгов не указан платёж в месяц — они не учтены в дате свободы.</div>' : ''}
+      ${noSched ? '<div class="muted small mt">У некоторых долгов не указан платёж в месяц — они не учтены в дате закрытия.</div>' : ''}
     </section>`;
   }
   h += owe.map(debtCard).join('');
@@ -286,20 +291,19 @@ function strategyCard() {
     const saved = base.never ? 0 : r2(base.interest - r.interest);
     return `<div><h4>${title}</h4><div class="muted small">${desc}</div>
       <div class="mt"><b>${r.months} ${plural(r.months, MONTH_FORMS)}</b> → ${fmtMonthYear(addMonths(now, r.months - 1))}</div>
-      <div class="small">Переплата: ${money(r.interest)}</div>
+      ${r.interest > 0 ? `<div class="small">Проценты: ${money(r.interest)}</div>` : ''}
       ${saved > 0 ? `<div class="small pos">Экономия: ${money(saved)}</div>` : ''}
       <ol>${r.order.map(x => `<li>${esc(x.name)} — ${x.closedAt} мес.</li>`).join('')}</ol></div>`;
   };
   return `<section class="card">
-    <div class="card-title">🧠 Как закрыть долги быстрее</div>
-    <div class="muted small">Сколько вы можете добавлять сверху к платежам каждый месяц? Когда один долг закрывается, его платёж идёт на следующий («снежный ком»).</div>
-    <div class="field mt"><span>Доплата в месяц</span><input class="inp" id="extraInp" inputmode="decimal" value="${extra || ''}" placeholder="например 5000"></div>
+    <div class="card-title">🧠 Как закрыть все долги быстрее</div>
+    <div class="muted small">Когда один кредит закрывается, освободившийся платёж направляйте на следующий («снежный ком»). А если добавлять сверху хотя бы небольшую сумму — срок сократится ещё сильнее:</div>
+    <div class="field mt"><span>Могу доплачивать сверху в месяц</span><input class="inp" id="extraInp" inputmode="decimal" value="${extra || ''}" placeholder="например 5000"></div>
     <div class="mt"></div>
     <div class="strategy">
-      ${res(av, '🏔 Лавина', 'Сначала самая высокая ставка — максимальная экономия')}
-      ${res(sn, '⛄ Снежный ком', 'Сначала самый маленький долг — быстрые победы, мотивация')}
+      ${res(av, '🏔 Лавина', 'Сначала самая высокая ставка — меньше переплата')}
+      ${res(sn, '⛄ Снежный ком', 'Сначала самый маленький остаток — быстрее виден результат')}
     </div>
-    ${!base.never ? `<div class="muted small mt">Без доплат и без «снежного кома» последний долг закроется через ${Math.max(0, ...activeOweDebts().map(d => (debtPayoffInfo(d) || {}).months || 0))} мес.</div>` : ''}
   </section>`;
 }
 
@@ -363,7 +367,6 @@ function viewReports() {
       <div class="stat"><span>В среднем в день</span><b>${money(avg)}</b></div>
     </div></section>`;
 
-  // инсайты
   const ins = [];
   if (savingsRate != null) ins.push(['🐷', savingsRate >= 20 ? `Вы сохранили <b>${Math.round(savingsRate)}%</b> дохода — отлично! Цель: 10–20% и больше.` : savingsRate >= 0 ? `Сохранено <b>${Math.round(savingsRate)}%</b> дохода. Старайтесь откладывать хотя бы 10%.` : `Расходы превысили доходы на <b>${money(R.exp - R.inc)}</b>. Срочно найдите, что сократить.`]);
   if (smallSum > 0) ins.push(['🪙', `Мелкие траты (до ${money(S.settings.smallLimit)}): <b>${small.length} шт. на ${money(smallSum)}</b> — ${Math.round(smallSum / (R.exp || 1) * 100)}% расходов. В пересчёте на год это ≈ <b>${money(smallSum / elapsed * 365)}</b>.`]);
@@ -373,7 +376,6 @@ function viewReports() {
   if (nav.rp === 'month' && R.exp > 0) ins.push(['🔮', `Если тратить в том же темпе, за месяц выйдет ≈ <b>${money(avg * dim(new Date()))}</b>.`]);
   if (ins.length) h += `<section class="card"><div class="card-title">🧭 Анализ</div>${ins.map(([e, t]) => `<div class="insight"><span class="e">${e}</span><div>${t}</div></div>`).join('')}</section>`;
 
-  // категории
   h += `<section class="card"><div class="card-title">🍩 Расходы по категориям</div>`;
   if (R.cats.length) {
     h += `<div class="donut-wrap">${donutSVG(R.cats.map(x => ({ value: x.v, color: x.c.color })), moneyShort(R.exp), 'всего, ' + S.settings.currency)}</div><div class="list">`;
@@ -418,7 +420,7 @@ function viewMore() {
     ${t('goals', '🐷', 'Цели', 'Подушка, накопления')}
     ${t('accounts', '💳', 'Счета', 'Карты, наличные')}
     ${t('categories', '🏷', 'Категории', 'Настроить под себя')}
-    ${t('settings', '⚙️', 'Настройки', 'Валюта, PIN, тема')}
+    ${t('settings', '⚙️', 'Настройки', 'Валюта, PIN, обновление')}
     ${t('backupScr', '💾', 'Резервная копия', 'Сохранить / восстановить')}
     ${t('help', '📲', 'Установка', 'Как поставить на телефон')}
   </div>
@@ -439,7 +441,7 @@ function viewPlans() {
   const incT = sum(S.incomes.filter(x => x.active !== false), 'amount');
   const billT = sum(S.bills.filter(x => x.active !== false), 'amount');
   const debtT = sum(activeOweDebts(), 'payment');
-  let h = `<section class="card"><div class="card-title">🧮 Ежемесячный баланс</div>
+  let h = `<section class="card"><div class="card-title">🧮 Ежемесячный баланс по плану</div>
     <div class="kv"><span>Доходы в месяц</span><b class="pos">+${money(incT)}</b></div>
     <div class="kv"><span>Кредиты и долги</span><b>−${money(debtT)}</b></div>
     <div class="kv"><span>Обязательные платежи</span><b>−${money(billT)}</b></div>
@@ -454,6 +456,7 @@ function viewPlans() {
     <div class="muted small mt">Кредиты и долги добавляются во вкладке «Долги» и попадают в календарь автоматически.</div>
   </section>`;
   h += `<section class="card"><div class="card-title">📅 Календарь: ${fmtMonthYear(now)}</div>
+    <div class="muted small" style="margin-bottom:6px">Кнопка <b>«Оплатить / Получил»</b> проводит операцию по счёту. Кнопка <b>«✓ Уже»</b> просто отмечает, что в этом месяце уже оплачено ранее (баланс счетов не меняется).</div>
     ${items.length ? `<div class="list">${items.map(planRow).join('')}</div>` : emptyBox('📅', 'Пока пусто')}</section>`;
   return h;
 }
@@ -501,10 +504,10 @@ function viewGoals() {
 function viewAccounts() {
   const b = balances();
   return `<section class="card"><div class="card-title">Всего (учитываемые): ${money(totalBalance(b))}</div><div class="list">
-    ${S.accounts.map(a => `<div class="row" data-act="editAccount" data-id="${a.id}"><div class="ico">${a.icon}</div><div class="grow"><div class="t">${esc(a.name)}</div><div class="s">${a.inTotal === false ? 'не входит в «Всего денег» (копилка/депозит)' : 'входит в общий баланс'}</div></div><div class="amt ${b[a.id] < 0 ? 'neg' : ''}">${money(b[a.id])}</div></div>`).join('')}
+    ${S.accounts.map(a => `<div class="row" data-act="editAccount" data-id="${a.id}"><div class="ico">${a.icon}</div><div class="grow"><div class="t">${esc(a.name)}</div><div class="s">${a.inTotal === false ? 'не входит в «Всего денег» (копилка/депозит)' : 'входит в общий баланс · нажмите, чтобы изменить остаток'}</div></div><div class="amt ${b[a.id] < 0 ? 'neg' : ''}">${money(b[a.id])}</div></div>`).join('')}
   </div></section>
   <div class="btns"><button class="btn primary" data-act="editAccount">+ Новый счёт</button><button class="btn" data-act="transfer">🔁 Перевод между счетами</button></div>
-  <div class="muted small mt">Совет: создайте счёт «Копилка» и снимите галочку «входит в общий баланс» — так отложенные деньги не будут считаться доступными для трат.</div>`;
+  <div class="muted small mt">Совет: нажмите на любой счёт, чтобы в любой момент быстро скорректировать текущий остаток денег.</div>`;
 }
 
 function viewCategories() {
@@ -521,6 +524,10 @@ function viewSettings() {
     <label class="field"><span>Тема</span><select data-set="theme"><option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Тёмная</option><option value="light" ${s.theme === 'light' ? 'selected' : ''}>Светлая</option></select></label>
     <label class="field"><span>«Мелкая трата» — до какой суммы</span><input data-set="smallLimit" inputmode="decimal" value="${s.smallLimit}"><small>Для анализа мелких трат в отчётах</small></label>
   </section>
+  <section class="card"><div class="card-title">🔄 Обновление приложения (версия ${APP_VER})</div>
+    <div class="muted small">Если вы загрузили новые файлы на GitHub, нажмите кнопку ниже — приложение обновит программу, а все ваши записанные данные сохранятся.</div>
+    <div class="btns"><button class="btn primary" data-act="forceUpdate">🔄 Обновить программу (без потери данных)</button></div>
+  </section>
   <section class="card"><div class="card-title">🔒 PIN-код</div>
     <div class="muted small">Защищает от посторонних глаз при открытии приложения.</div>
     <div class="btns">${s.pin ? '<button class="btn" data-act="setPin">Сменить PIN</button><button class="btn danger" data-act="removePin">Убрать PIN</button>' : '<button class="btn primary" data-act="setPin">Установить PIN</button>'}</div>
@@ -529,7 +536,7 @@ function viewSettings() {
     <div class="muted small">Операций: ${S.transactions.length} · Долгов: ${S.debts.length} · Размер: ${(JSON.stringify(S).length / 1024).toFixed(1)} КБ</div>
     <div class="btns"><button class="btn" data-act="sub" data-sub="backupScr">💾 Резервная копия</button><button class="btn danger" data-act="reset">Удалить все данные</button></div>
   </section>
-  <div class="muted small center">ФинКонтроль · данные хранятся только на вашем устройстве</div>`;
+  <div class="muted small center">ФинКонтроль v${APP_VER} · данные хранятся только на вашем устройстве</div>`;
 }
 
 function viewBackup() {

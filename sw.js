@@ -1,4 +1,4 @@
-const CACHE = 'finkontrol-pwa-v1';
+const CACHE = 'finkontrol-pwa-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -21,13 +21,16 @@ self.addEventListener('activate', e => {
   );
 });
 
+// Стратегия Network-First (сначала свежий файл с GitHub, а если нет интернета — из памяти телефона)
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).then(resp => {
-      const copy = resp.clone();
-      caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+    fetch(e.request).then(resp => {
+      if (resp && resp.status === 200) {
+        const copy = resp.clone();
+        caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
+      }
       return resp;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() => caches.match(e.request).then(cached => cached || caches.match('./index.html')))
   );
 });

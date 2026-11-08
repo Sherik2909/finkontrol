@@ -1,7 +1,7 @@
 'use strict';
 /* =========================================================
    ФинКонтроль — модальные окна (sheets), обработчики событий,
-   экспорт, PIN-блокировка, онбординг и PWA
+   экспорт, PIN-блокировка, онбординг и PWA (v1.2 Pro)
    ========================================================= */
 
 let toastTimer = null;
@@ -11,7 +11,7 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
 
 /* ---------- Bottom Sheet Engine ---------- */
@@ -156,84 +156,144 @@ function openTxSheet(txId = null, presetType = 'expense') {
   });
 }
 
-/* =================== 2. ДОЛГИ И КРЕДИТЫ =================== */
+/* =================== 2. ДОЛГИ И КРЕДИТЫ (ПРОФИ-ВЕРСИЯ) =================== */
 function openDebtSheet(debtId = null) {
   const existing = debtId ? debtById(debtId) : null;
   const paidBefore = existing ? r2(debtPaidPrincipal(existing.id)) : 0;
   const curRem = existing ? debtRemaining(existing) : '';
+  const curYM = ym(new Date());
+  const todayDay = new Date().getDate();
+
   const d = existing ? Object.assign({}, existing) : {
-    name: '', kind: 'credit', total: '', base: '', rate: '', payment: '', payDay: 15, note: '', closed: false,
+    name: '', kind: 'credit', total: '', base: '', rate: '', payment: '', payDay: 15, calcMode: 'fixed', note: '', closed: false,
   };
+  if (!d.calcMode) d.calcMode = 'fixed';
+
+  // Если редактируем — смотрим, отмечен ли этот месяц; если новый и число платежа уже прошло в этом месяце — предлагаем галочку
+  const alreadyDoneThisMonth = existing ? isPlanDone('debt:' + existing.id, curYM) : false;
 
   const kindOpts = Object.entries(DEBT_KINDS).map(([k, v]) => `<option value="${k}" ${d.kind === k ? 'selected' : ''}>${v.i} ${v.n}</option>`).join('');
 
   const html = `<form id="debtForm" class="form">
     <div class="grid2">
       <label class="field"><span>Вид долга / кредита</span><select name="kind">${kindOpts}</select></label>
-      <label class="field"><span>Название / кому</span><input name="name" placeholder="Сбер кредит, МФО, Ивану…" value="${esc(d.name)}" required></label>
+      <label class="field"><span>Название / кому</span><input name="name" placeholder="Сбер, Каспи, Рассрочка, Другу…" value="${esc(d.name)}" required></label>
     </div>
-    <div class="grid2">
-      <label class="field"><span>Остаток долга СЕЙЧАС</span>
-        <input name="remNow" inputmode="decimal" placeholder="Напр. 180000" value="${existing ? curRem : ''}" required>
-        <small>Сколько осталось вернуть на сегодня</small></label>
-      <label class="field"><span>Изначальная сумма (необяз.)</span>
-        <input name="total" inputmode="decimal" placeholder="Для % прогресса" value="${d.total || ''}">
-        <small>Сколько брали изначально</small></label>
-    </div>
+
     <div class="grid2">
       <label class="field"><span>Платёж в месяц</span>
-        <input name="payment" inputmode="decimal" placeholder="Напр. 12500" value="${d.payment || ''}">
-        <small>Оставьте 0, если без графика</small></label>
-      <label class="field"><span>Число платежа (1–31)</span>
+        <input name="payment" inputmode="decimal" placeholder="Напр. 10000" value="${d.payment || ''}">
+        <small>Сколько платите каждый месяц</small></label>
+      <label class="field"><span>Сколько месяцев осталось?</span>
+        <input name="monthsLeft" type="number" min="1" max="600" placeholder="Напр. 7">
+        <small>Впишите число — остаток посчитается сам!</small></label>
+    </div>
+
+    <div class="grid2">
+      <label class="field"><span>Остаток долга СЕЙЧАС</span>
+        <input name="remNow" inputmode="decimal" placeholder="Напр. 70000" value="${existing ? curRem : ''}" required>
+        <small>Сколько всего осталось выплатить</small></label>
+      <label class="field"><span>Число оплаты (1–31)</span>
         <input name="payDay" type="number" min="1" max="31" value="${d.payDay || 15}"></label>
     </div>
-    <div class="grid2">
-      <label class="field"><span>Ставка % годовых</span>
-        <input name="rate" inputmode="decimal" placeholder="0 если без %" value="${d.rate || ''}">
-        <small>Для рассрочки и долга другу — 0</small></label>
-      <label class="field"><span>Срок в мес. (авторасчёт платежа)</span>
-        <input name="calcMonths" type="number" min="1" max="360" placeholder="Напр. 24">
-        <small>Подсчитает аннуитетный платёж</small></label>
-    </div>
+
+    <label class="check" style="background:var(--card2);padding:10px 12px;border-radius:12px">
+      <input type="checkbox" name="paidThisMonth" ${alreadyDoneThisMonth ? 'checked' : ''}>
+      <span><b>✅ В этом месяце (${MONTHS[new Date().getMonth()]}) уже оплачен</b><br><small class="muted">Отметьте, если платёж за этот месяц уже внесён и следующий только в следующем месяце</small></span>
+    </label>
+
     <div class="preview" id="debtPreview"></div>
-    <label class="field"><span>Заметка (договор, условия, телефон)</span>
-      <input name="note" placeholder="Любые детали…" value="${esc(d.note || '')}"></label>
-    ${existing ? `<label class="check"><input type="checkbox" name="closed" ${d.closed ? 'checked' : ''}><span>Перенести в архив (закрыт)</span></label>` : ''}
+
+    <details style="background:var(--card2);padding:10px 12px;border-radius:12px">
+      <summary style="cursor:pointer;font-weight:600;font-size:13.5px">⚙️ Дополнительно (процент банка, начальная сумма, заметка)</summary>
+      <div class="form mt">
+        <label class="field"><span>Как считать остаток?</span>
+          <select name="calcMode">
+            <option value="fixed" ${d.calcMode !== 'bank' ? 'selected' : ''}>По графику: Остаток ÷ Платёж = точное число месяцев (рекомендуется)</option>
+            <option value="bank" ${d.calcMode === 'bank' ? 'selected' : ''}>Банковский: начислять % годовых сверху на остаток каждый месяц</option>
+          </select>
+        </label>
+        <div class="grid2">
+          <label class="field"><span>Ставка % годовых (если нужна)</span>
+            <input name="rate" inputmode="decimal" placeholder="0" value="${d.rate || ''}"></label>
+          <label class="field"><span>Изначальная сумма (для % шкалы)</span>
+            <input name="total" inputmode="decimal" placeholder="Необязательно" value="${d.total || ''}"></label>
+        </div>
+        <label class="field"><span>Заметка</span>
+          <input name="note" placeholder="Договор, телефон, детали…" value="${esc(d.note || '')}"></label>
+        ${existing ? `<label class="check"><input type="checkbox" name="closed" ${d.closed ? 'checked' : ''}><span>Перенести в архив (закрыт)</span></label>` : ''}
+      </div>
+    </details>
+
     <div class="sheet-actions">
       ${existing ? `<button type="button" class="btn danger" id="delDebtBtn">Удалить</button>` : ''}
       <button type="submit" class="btn primary grow">${existing ? 'Сохранить' : 'Добавить'}</button>
     </div>
   </form>`;
 
-  openSheet(existing ? 'Редактировать долг' : 'Новый долг или кредит', html, sh => {
+  openSheet(existing ? 'Редактировать долг' : 'Добавить долг или кредит', html, sh => {
     const f = $('#debtForm', sh);
     const prev = $('#debtPreview', sh);
 
-    function updatePreview() {
-      const rem = calc(f.elements.remNow.value);
+    // Инициализируем поле "Сколько месяцев осталось", если уже есть остаток и платёж
+    const initRem = calc(f.elements.remNow.value);
+    const initPay = calc(f.elements.payment.value);
+    if (initRem > 0 && initPay > 0) {
+      const p0 = payoff(initRem, calc(f.elements.rate.value), initPay, f.elements.calcMode.value);
+      if (p0 && !p0.never) f.elements.monthsLeft.value = p0.months;
+    }
+
+    function updatePreview(source) {
+      const mode = f.elements.calcMode.value;
       const rate = calc(f.elements.rate.value);
-      const m = parseInt(f.elements.calcMonths.value, 10);
-      if (rem > 0 && m > 0 && document.activeElement === f.elements.calcMonths) {
-        f.elements.payment.value = Math.ceil(annuity(rem, rate, m));
+      let pay = calc(f.elements.payment.value);
+      let mLeft = parseInt(f.elements.monthsLeft.value, 10);
+      let rem = calc(f.elements.remNow.value);
+
+      // Если пользователь вводит "Платёж" и "Сколько месяцев осталось" — автоматически считаем точный Остаток!
+      if ((source === 'monthsLeft' || (source === 'payment' && !existing && mLeft > 0)) && pay > 0 && mLeft > 0) {
+        if (mode === 'bank' && rate > 0) {
+          const r = rate / 1200;
+          rem = r2(pay * (1 - Math.pow(1 + r, -mLeft)) / r);
+        } else {
+          rem = r2(pay * mLeft);
+        }
+        f.elements.remNow.value = rem;
+      } else if ((source === 'remNow' || source === 'payment' || source === 'calcMode' || source === 'rate') && rem > 0 && pay > 0) {
+        const p = payoff(rem, rate, pay, mode);
+        if (p && !p.never) f.elements.monthsLeft.value = p.months;
       }
-      const pay = calc(f.elements.payment.value);
+
+      // Автоподсказка галочки "В этом месяце уже оплачен", если при создании нового долга день оплаты уже прошёл
+      if (source === 'payDay' && !existing) {
+        const pd = parseInt(f.elements.payDay.value, 10) || 1;
+        if (pd < todayDay) f.elements.paidThisMonth.checked = true;
+      }
+
+      rem = calc(f.elements.remNow.value);
+      pay = calc(f.elements.payment.value);
       if (!(rem > 0) || !(pay > 0)) { prev.innerHTML = ''; return; }
-      const p = payoff(rem, rate, pay);
+      const p = payoff(rem, rate, pay, mode);
       if (!p) { prev.innerHTML = ''; return; }
       if (p.never) {
-        prev.innerHTML = `<span class="neg">⚠️ Ежемесячный процент (${money(rem * rate / 1200)}) больше платежа! Долг никогда не закроется. Увеличьте платёж.</span>`;
+        prev.innerHTML = `<span class="neg">⚠️ Ежемесячный процент больше платежа! Долг не уменьшается.</span>`;
       } else {
-        const dt = addMonths(new Date(), p.months - 1);
-        prev.innerHTML = `📅 Закроется через <b>${p.months} ${plural(p.months, MONTH_FORMS)}</b> (${fmtMonthYear(dt)})${p.interest > 0 ? ` · переплата процентами: <b>${money(p.interest)}</b>` : ' · без переплаты'}`;
+        const paidNow = f.elements.paidThisMonth.checked;
+        const startOffset = paidNow ? 1 : 0;
+        const dt = addMonths(new Date(), startOffset + p.months - 1);
+        prev.innerHTML = `✅ Осталось ровно <b>${p.months} ${plural(p.months, MONTH_FORMS)}</b> (${p.months} платежей по ${money(pay)})<br>📅 Последний платёж: <b>${fmtMonthYear(dt)}</b> ${paidNow ? '<span class="pos">(этот месяц уже оплачен)</span>' : '(включая этот месяц)'}`;
       }
     }
 
-    ['remNow', 'rate', 'payment', 'calcMonths'].forEach(k => f.elements[k].addEventListener('input', updatePreview));
-    updatePreview();
+    ['remNow', 'payment', 'monthsLeft', 'rate', 'calcMode', 'payDay', 'paidThisMonth'].forEach(k => {
+      f.elements[k].addEventListener('input', () => updatePreview(k));
+      f.elements[k].addEventListener('change', () => updatePreview(k));
+    });
+    updatePreview('init');
 
     if (existing) {
       $('#delDebtBtn', sh).onclick = () => {
-        if (!confirm(`Удалить «${existing.name}»? Операции платежей останутся в истории.`)) return;
+        if (!confirm(`Удалить «${existing.name}»?`)) return;
         S.debts = S.debts.filter(x => x.id !== existing.id);
         save(); closeSheet(); render(); toast('Долг удалён');
       };
@@ -244,10 +304,11 @@ function openDebtSheet(debtId = null) {
       const name = f.elements.name.value.trim();
       const remNow = r2(calc(f.elements.remNow.value));
       if (!name) { toast('Укажите название'); return; }
+      const id = existing ? existing.id : uid();
       const base = r2(remNow + paidBefore);
       const total = r2(Math.max(calc(f.elements.total.value) || 0, base));
       const obj = {
-        id: existing ? existing.id : uid(),
+        id,
         name,
         kind: f.elements.kind.value,
         base,
@@ -255,11 +316,16 @@ function openDebtSheet(debtId = null) {
         rate: r2(calc(f.elements.rate.value)),
         payment: r2(calc(f.elements.payment.value)),
         payDay: clamp(parseInt(f.elements.payDay.value, 10) || 1, 1, 31),
+        calcMode: f.elements.calcMode.value || 'fixed',
         note: f.elements.note.value.trim(),
         closed: existing ? !!f.elements.closed?.checked : false,
       };
       if (existing) Object.assign(existing, obj);
       else S.debts.push(obj);
+
+      // Сохраняем отметку "В этом месяце уже оплачен"
+      setPlanMark('debt:' + id, curYM, f.elements.paidThisMonth.checked);
+
       save(); closeSheet(); render(); toast(existing ? 'Изменения сохранены' : 'Долг добавлен');
     };
   });
@@ -271,7 +337,8 @@ function openPayDebtSheet(debtId, planDate = null) {
   if (!d) return;
   const rem = debtRemaining(d);
   const lent = d.kind === 'lent';
-  const monthlyInterest = r2(rem * ((+d.rate || 0) / 1200));
+  const useBankRate = d.calcMode === 'bank' && (+d.rate || 0) > 0;
+  const monthlyInterest = useBankRate ? r2(rem * ((+d.rate || 0) / 1200)) : 0;
   const defaultAmt = +d.payment > 0 ? Math.min(+d.payment, r2(rem + monthlyInterest)) : rem;
   const accOpts = S.accounts.map(a => `<option value="${a.id}" ${a.id === (S.settings.lastAccount || S.accounts[0]?.id) ? 'selected' : ''}>${a.icon} ${esc(a.name)} (${money(balances()[a.id])})</option>`).join('');
 
@@ -283,19 +350,18 @@ function openPayDebtSheet(debtId, planDate = null) {
     <div class="grid2">
       <label class="field"><span>${lent ? 'Сколько вам вернули' : 'Сумма платежа'}</span>
         <input name="amount" inputmode="decimal" value="${defaultAmt || ''}" required></label>
-      <label class="field"><span>Из них в счёт основного долга</span>
-        <input name="principal" inputmode="decimal" value="${r2(Math.max(0, defaultAmt - monthlyInterest))}" required>
-        <small>На сколько уменьшится сам долг</small></label>
+      <label class="field"><span>Уменьшить остаток долга на</span>
+        <input name="principal" inputmode="decimal" value="${r2(Math.max(0, defaultAmt - monthlyInterest))}" required></label>
     </div>
     <div class="grid2">
-      <label class="field"><span>${lent ? 'На счёт' : 'Со счёта'}</span><select name="accountId">${accOpts}</select></label>
+      <label class="field"><span>${lent ? 'На счёт' : 'Списать со счёта'}</span><select name="accountId">${accOpts}</select></label>
       <label class="field"><span>Дата</span><input type="date" name="date" value="${planDate || todayStr()}" required></label>
     </div>
     <label class="field"><span>Комментарий</span><input name="note" placeholder="Ежемесячный платёж / досрочное погашение"></label>
-    <div class="sheet-actions"><button type="submit" class="btn primary grow">${lent ? 'Записать возврат' : 'Провести платёж'}</button></div>
+    <div class="sheet-actions"><button type="submit" class="btn primary grow">${lent ? 'Записать возврат' : 'Списать со счёта и уменьшить долг'}</button></div>
   </form>`;
 
-  openSheet(lent ? 'Возврат долга мне' : 'Платёж по долгу / кредиту', html, sh => {
+  openSheet(lent ? 'Возврат долга мне' : 'Оплата по долгу / кредиту', html, sh => {
     const f = $('#payDebtForm', sh);
     f.elements.amount.oninput = () => {
       const a = calc(f.elements.amount.value);
@@ -336,15 +402,17 @@ function openDebtHistorySheet(debtId) {
   if (!d) return;
   const list = S.transactions.filter(t => t.debtId === debtId).sort((a, b) => b.date.localeCompare(a.date));
   const totalPaid = sum(list, 'amount');
-  const html = `<div class="preview" style="margin-bottom:10px">Всего платежей: <b>${list.length}</b> на сумму <b>${money(totalPaid)}</b> · Остаток: <b>${money(debtRemaining(d))}</b></div>
-    ${list.length ? `<div class="list">${list.map(txRow).join('')}</div>` : emptyBox('📭', 'Платежей по этому долгу ещё не было')}`;
+  const html = `<div class="preview" style="margin-bottom:10px">Всего платежей в приложении: <b>${list.length}</b> на сумму <b>${money(totalPaid)}</b> · Остаток: <b>${money(debtRemaining(d))}</b></div>
+    ${list.length ? `<div class="list">${list.map(txRow).join('')}</div>` : emptyBox('📭', 'Платежей через приложение ещё не было')}`;
   openSheet('История: ' + d.name, html);
 }
 
 /* =================== 3. РЕГУЛЯРНЫЕ ДОХОДЫ И ОБЯЗАТЕЛЬНЫЕ ПЛАТЕЖИ =================== */
 function openIncomeSheet(id = null) {
   const existing = id ? S.incomes.find(x => x.id === id) : null;
+  const curYM = ym(new Date());
   const x = existing || { name: '', amount: '', day: 10, accountId: S.accounts[0]?.id || 'a_card', categoryId: 'c_salary', active: true };
+  const alreadyDone = existing ? isPlanDone('inc:' + existing.id, curYM) : false;
   const incCats = S.categories.filter(c => c.type === 'income').map(c => `<option value="${c.id}" ${c.id === x.categoryId ? 'selected' : ''}>${c.icon} ${esc(c.name)}</option>`).join('');
   const accs = S.accounts.map(a => `<option value="${a.id}" ${a.id === x.accountId ? 'selected' : ''}>${a.icon} ${esc(a.name)}</option>`).join('');
 
@@ -358,7 +426,11 @@ function openIncomeSheet(id = null) {
       <label class="field"><span>Категория</span><select name="categoryId">${incCats}</select></label>
       <label class="field"><span>На какой счёт</span><select name="accountId">${accs}</select></label>
     </div>
-    <label class="check"><input type="checkbox" name="active" ${x.active !== false ? 'checked' : ''}><span>Активен (учитывать в прогнозе)</span></label>
+    <label class="check" style="background:var(--card2);padding:10px 12px;border-radius:12px">
+      <input type="checkbox" name="doneThisMonth" ${alreadyDone ? 'checked' : ''}>
+      <span><b>✅ В этом месяце (${MONTHS[new Date().getMonth()]}) уже получена</b><br><small class="muted">Отметьте, если эта выплата уже пришла и уже входит в ваш текущий баланс</small></span>
+    </label>
+    <label class="check"><input type="checkbox" name="active" ${x.active !== false ? 'checked' : ''}><span>Активен (учитывать каждый месяц)</span></label>
     <div class="sheet-actions">
       ${existing ? `<button type="button" class="btn danger" id="delIncBtn">Удалить</button>` : ''}
       <button type="submit" class="btn primary grow">Сохранить</button>
@@ -375,8 +447,9 @@ function openIncomeSheet(id = null) {
     }
     f.onsubmit = e => {
       e.preventDefault();
+      const itemId = existing ? existing.id : uid();
       const obj = {
-        id: existing ? existing.id : uid(),
+        id: itemId,
         name: f.elements.name.value.trim() || 'Доход',
         amount: r2(calc(f.elements.amount.value)),
         day: clamp(parseInt(f.elements.day.value, 10) || 1, 1, 31),
@@ -386,6 +459,7 @@ function openIncomeSheet(id = null) {
       };
       if (existing) Object.assign(existing, obj);
       else S.incomes.push(obj);
+      setPlanMark('inc:' + itemId, curYM, f.elements.doneThisMonth.checked);
       save(); closeSheet(); render(); toast('Доход сохранён');
     };
   });
@@ -393,7 +467,9 @@ function openIncomeSheet(id = null) {
 
 function openBillSheet(id = null) {
   const existing = id ? S.bills.find(x => x.id === id) : null;
+  const curYM = ym(new Date());
   const x = existing || { name: '', amount: '', day: 20, accountId: S.accounts[0]?.id || 'a_card', categoryId: 'c_home', active: true };
+  const alreadyDone = existing ? isPlanDone('bill:' + existing.id, curYM) : false;
   const expCats = S.categories.filter(c => c.type === 'expense').map(c => `<option value="${c.id}" ${c.id === x.categoryId ? 'selected' : ''}>${c.icon} ${esc(c.name)}</option>`).join('');
   const accs = S.accounts.map(a => `<option value="${a.id}" ${a.id === x.accountId ? 'selected' : ''}>${a.icon} ${esc(a.name)}</option>`).join('');
 
@@ -407,6 +483,10 @@ function openBillSheet(id = null) {
       <label class="field"><span>Категория</span><select name="categoryId">${expCats}</select></label>
       <label class="field"><span>Со счёта</span><select name="accountId">${accs}</select></label>
     </div>
+    <label class="check" style="background:var(--card2);padding:10px 12px;border-radius:12px">
+      <input type="checkbox" name="doneThisMonth" ${alreadyDone ? 'checked' : ''}>
+      <span><b>✅ В этом месяце (${MONTHS[new Date().getMonth()]}) уже оплачен</b><br><small class="muted">Отметьте, если за этот месяц вы уже заплатили</small></span>
+    </label>
     <label class="check"><input type="checkbox" name="active" ${x.active !== false ? 'checked' : ''}><span>Активен (резервировать деньги под него)</span></label>
     <div class="sheet-actions">
       ${existing ? `<button type="button" class="btn danger" id="delBillBtn">Удалить</button>` : ''}
@@ -424,8 +504,9 @@ function openBillSheet(id = null) {
     }
     f.onsubmit = e => {
       e.preventDefault();
+      const itemId = existing ? existing.id : uid();
       const obj = {
-        id: existing ? existing.id : uid(),
+        id: itemId,
         name: f.elements.name.value.trim() || 'Платёж',
         amount: r2(calc(f.elements.amount.value)),
         day: clamp(parseInt(f.elements.day.value, 10) || 1, 1, 31),
@@ -435,6 +516,7 @@ function openBillSheet(id = null) {
       };
       if (existing) Object.assign(existing, obj);
       else S.bills.push(obj);
+      setPlanMark('bill:' + itemId, curYM, f.elements.doneThisMonth.checked);
       save(); closeSheet(); render(); toast('Платёж сохранён');
     };
   });
@@ -453,8 +535,8 @@ function executePlanItem(key, dateStr) {
       <label class="field"><span>Фактическая сумма</span><input name="amount" inputmode="decimal" value="${item.amount}" required></label>
       <label class="field"><span>Дата</span><input type="date" name="date" value="${todayStr()}" required></label>
     </div>
-    <label class="field"><span>${isInc ? 'На счёт' : 'Со счёта'}</span><select name="accountId">${accs}</select></label>
-    <div class="sheet-actions"><button type="submit" class="btn primary grow">${isInc ? 'Зачислить доход' : 'Записать оплату'}</button></div>
+    <label class="field"><span>${isInc ? 'Зачислить на счёт' : 'Списать со счёта'}</span><select name="accountId">${accs}</select></label>
+    <div class="sheet-actions"><button type="submit" class="btn primary grow">${isInc ? 'Зачислить доход' : 'Списать оплату'}</button></div>
   </form>`;
 
   openSheet(isInc ? 'Получение дохода' : 'Оплата обязательного платежа', html, sh => {
@@ -463,7 +545,6 @@ function executePlanItem(key, dateStr) {
       e.preventDefault();
       const amount = r2(calc(f.elements.amount.value));
       if (!(amount > 0)) return;
-      // привязываем к месяцу плановой даты, чтобы отметилось выполненным в текущем месяце
       const txDate = f.elements.date.value || todayStr();
       S.transactions.push({
         id: uid(),
@@ -494,9 +575,9 @@ function openAccountSheet(id = null) {
       <label class="field"><span>Иконка</span><input name="icon" id="accIconInp" value="${esc(a.icon)}" maxlength="4"></label>
     </div>
     ${emojiPickerHTML('#accIconInp')}
-    <label class="field"><span>Текущий баланс на счёте сейчас</span>
+    <label class="field"><span>Сколько денег сейчас на этом счёте</span>
       <input name="currentBalance" inputmode="decimal" value="${existing ? curBal : ''}" placeholder="0">
-      <small>Приложение автоматически подстроит начальный остаток под эту сумму</small></label>
+      <small>Можете в любой момент вписать реальный остаток — баланс сразу выровняется</small></label>
     <label class="check"><input type="checkbox" name="inTotal" ${a.inTotal !== false ? 'checked' : ''}>
       <span>Учитывать в «Всего денег» и дневном лимите (снимите для копилки/неприкосновенного запаса)</span></label>
     <div class="sheet-actions">
@@ -505,7 +586,7 @@ function openAccountSheet(id = null) {
     </div>
   </form>`;
 
-  openSheet(existing ? 'Настроить счёт' : 'Новый счёт', html, sh => {
+  openSheet(existing ? 'Баланс и настройки счёта' : 'Новый счёт', html, sh => {
     const f = $('#accForm', sh);
     if (existing && $('#delAccBtn', sh)) {
       $('#delAccBtn', sh).onclick = () => {
@@ -691,8 +772,8 @@ function printCurrentReport() {
     </table>
     ${owe.length ? `<h2>3. Активные кредиты и долги</h2>
     <table>
-      <tr><th>Название</th><th class="r">Остаток</th><th class="r">Платёж/мес</th><th>Ставка</th></tr>
-      ${owe.map(d => `<tr><td>${esc(d.name)}</td><td class="r">${money(debtRemaining(d))}</td><td class="r">${money(d.payment)}</td><td>${d.rate || 0}%</td></tr>`).join('')}
+      <tr><th>Название</th><th class="r">Остаток</th><th class="r">Платёж/мес</th><th>Осталось мес.</th></tr>
+      ${owe.map(d => { const po = debtPayoffInfo(d); return `<tr><td>${esc(d.name)}</td><td class="r">${money(debtRemaining(d))}</td><td class="r">${money(d.payment)}</td><td>${po && po.months ? po.months + ' мес.' : '—'}</td></tr>`; }).join('')}
     </table>` : ''}
     <h2>4. Детализация операций (${R.list.length})</h2>
     <table>
@@ -820,6 +901,24 @@ document.addEventListener('click', e => {
     case 'debtHistory': openDebtHistorySheet(actEl.dataset.id); break;
     case 'toggleClosed': nav.showClosed = !nav.showClosed; render(); break;
     case 'planDo': executePlanItem(actEl.dataset.key, actEl.dataset.date); break;
+    case 'markPlanSilent': {
+      const k = actEl.dataset.key, ymS = actEl.dataset.ym || ym(new Date());
+      setPlanMark(k, ymS, true);
+      save(); render();
+      toast('✓ Отмечено как уже оплаченное в этом месяце');
+      break;
+    }
+    case 'unmarkPlan': {
+      const k = actEl.dataset.key, ymS = actEl.dataset.ym || ym(new Date());
+      if (S.planMarks && S.planMarks[k + '|' + ymS]) {
+        setPlanMark(k, ymS, false);
+        save(); render();
+        toast('Отметка за этот месяц снята');
+      } else {
+        toast('Этот платёж проведён операцией — удалить его можно во вкладке «Операции»');
+      }
+      break;
+    }
     case 'editIncome': openIncomeSheet(actEl.dataset.id || null); break;
     case 'editBill': openBillSheet(actEl.dataset.id || null); break;
     case 'editAccount': openAccountSheet(actEl.dataset.id || null); break;
@@ -847,6 +946,15 @@ document.addEventListener('click', e => {
     case 'printReport': printCurrentReport(); break;
     case 'backup': doBackup(); break;
     case 'importData': $('#importFile').click(); break;
+    case 'forceUpdate': {
+      toast('Обновляем программу…');
+      if ('caches' in window) {
+        caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).finally(() => location.reload());
+      } else {
+        location.reload();
+      }
+      break;
+    }
     case 'setPin': {
       const p = prompt('Введите 4 цифры для PIN-кода:');
       if (p && /^\d{4}$/.test(p.trim())) {
@@ -911,18 +1019,13 @@ $('#importFile').addEventListener('change', e => {
   reader.readAsText(file);
 });
 
-// Скрытие стартовой подсказки, если нажали «Скрыть»
-const origStartCard = startCard;
-window.startCard = function () {
-  if (S.settings.startDismissed) return '';
-  return origStartCard();
-};
-
-/* ---------- Инициализация ---------- */
+/* ---------- Инициализация и автообновление PWA ---------- */
 render();
 showLockScreen();
 checkOnboarding();
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.update().catch(() => {});
+  }).catch(() => {});
 }
